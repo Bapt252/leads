@@ -1,0 +1,9 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "leads-france-travail",
+  "main": "src/index.ts",
+  "compatibility_date": "2025-02-10",
+  "observability": {
+    "enabled": true
+  }
+}
