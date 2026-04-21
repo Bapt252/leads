@@ -22,6 +22,11 @@ const HEADERS = [
   'rome_label',
   'posted_at',
   'status',
+  'prospected_at',
+  'contact_name',
+  'contact_email',
+  'contact_phone',
+  'notes',
   'created_at',
 ] as const;
 
@@ -41,6 +46,11 @@ export function jobsToCsv(jobs: Job[]): string {
         j.rome_label,
         j.posted_at,
         j.status,
+        j.prospected_at,
+        j.contact_name,
+        j.contact_email,
+        j.contact_phone,
+        j.notes,
         j.created_at,
       ]
         .map(escapeCell)

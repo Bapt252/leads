@@ -7,6 +7,7 @@ import {
 } from '@/lib/db';
 import { ingestAllAction, markAllProspectedAction } from './actions';
 import { FiltersBar } from './FiltersBar';
+import { ProspectButton } from './ProspectButton';
 
 // Lecture du filtre statut depuis ?status=, valeur par défaut "new".
 function parseStatus(raw: string | undefined): JobFilter {
@@ -179,7 +180,9 @@ function JobsTable({ jobs }: { jobs: Job[] }) {
             <th className="px-3 py-2 font-medium">Métier</th>
             <th className="px-3 py-2 font-medium">Secteur</th>
             <th className="px-3 py-2 font-medium">Statut</th>
+            <th className="px-3 py-2 font-medium">Contact</th>
             <th className="px-3 py-2 font-medium">Lien</th>
+            <th className="px-3 py-2 font-medium">Action</th>
           </tr>
         </thead>
         <tbody>
@@ -201,6 +204,9 @@ function JobsTable({ jobs }: { jobs: Job[] }) {
               <td className="px-3 py-2">
                 <StatusBadge status={job.status} />
               </td>
+              <td className="px-3 py-2 text-xs text-zinc-600">
+                <ContactCell job={job} />
+              </td>
               <td className="px-3 py-2">
                 {job.source_url ? (
                   <a
@@ -215,12 +221,25 @@ function JobsTable({ jobs }: { jobs: Job[] }) {
                   '—'
                 )}
               </td>
+              <td className="px-3 py-2">
+                <ProspectButton job={job} />
+              </td>
             </tr>
           ))}
         </tbody>
       </table>
     </div>
   );
+}
+
+function ContactCell({ job }: { job: Job }) {
+  const parts = [
+    job.contact_name,
+    job.contact_email,
+    job.contact_phone,
+  ].filter((v): v is string => v !== null && v !== '');
+  if (parts.length === 0) return <span className="text-zinc-400">—</span>;
+  return <span className="whitespace-pre-line">{parts.join('\n')}</span>;
 }
 
 function StatusBadge({ status }: { status: Job['status'] }) {
