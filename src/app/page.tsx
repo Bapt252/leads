@@ -1,11 +1,23 @@
 import Link from 'next/link';
-import { getJobs, type Job, type JobFilter } from '@/lib/db';
+import {
+  getDistinctValues,
+  getJobs,
+  type Job,
+  type JobFilter,
+} from '@/lib/db';
 import { ingestAllAction, markAllProspectedAction } from './actions';
+import { FiltersBar } from './FiltersBar';
 
-// Lecture du filtre depuis ?status=, valeur par défaut "new".
-function parseFilter(raw: string | undefined): JobFilter {
+// Lecture du filtre statut depuis ?status=, valeur par défaut "new".
+function parseStatus(raw: string | undefined): JobFilter {
   if (raw === 'prospected' || raw === 'all') return raw;
   return 'new';
+}
+
+// Normalise un paramètre optionnel de searchParams en string|undefined.
+function asString(raw: string | string[] | undefined): string | undefined {
+  if (typeof raw === 'string' && raw !== '') return raw;
+  return undefined;
 }
 
 const SOURCE_LABEL: Record<Job['source'], string> = {
@@ -17,13 +29,35 @@ const SOURCE_LABEL: Record<Job['source'], string> = {
 export default async function HomePage({
   searchParams,
 }: {
-  searchParams: Promise<{ status?: string }>;
+  searchParams: Promise<{
+    status?: string;
+    departement?: string;
+    sector?: string;
+    rome_label?: string;
+  }>;
 }) {
   const params = await searchParams;
-  const filter = parseFilter(params.status);
-  const jobs = getJobs(filter);
+  const status = parseStatus(params.status);
+  const departement = asString(params.departement);
+  const sector = asString(params.sector);
+  const rome_label = asString(params.rome_label);
+
+  const jobs = getJobs({ status, departement, sector, rome_label });
+  const departements = getDistinctValues('departement');
+  const sectors = getDistinctValues('sector');
+  const romeLabels = getDistinctValues('rome_label');
+
   const newCount =
-    filter === 'prospected' ? 0 : jobs.filter((j) => j.status === 'new').length;
+    status === 'prospected' ? 0 : jobs.filter((j) => j.status === 'new').length;
+
+  // URL paramétrée pour préserver les filtres en basculant d'onglet statut.
+  const statusLinkBase = new URLSearchParams();
+  if (departement) statusLinkBase.set('departement', departement);
+  if (sector) statusLinkBase.set('sector', sector);
+  if (rome_label) statusLinkBase.set('rome_label', rome_label);
+
+  const exportParams = new URLSearchParams(statusLinkBase);
+  exportParams.set('status', status);
 
   return (
     <main className="mx-auto max-w-6xl p-6">
@@ -45,14 +79,36 @@ export default async function HomePage({
       </header>
 
       <nav className="mb-4 flex gap-1 text-sm">
-        <FilterTab label="New" value="new" current={filter} />
-        <FilterTab label="Prospected" value="prospected" current={filter} />
-        <FilterTab label="All" value="all" current={filter} />
+        <StatusTab
+          label="New"
+          value="new"
+          current={status}
+          preserved={statusLinkBase}
+        />
+        <StatusTab
+          label="Prospected"
+          value="prospected"
+          current={status}
+          preserved={statusLinkBase}
+        />
+        <StatusTab
+          label="All"
+          value="all"
+          current={status}
+          preserved={statusLinkBase}
+        />
       </nav>
+
+      <FiltersBar
+        departements={departements}
+        sectors={sectors}
+        romeLabels={romeLabels}
+        current={{ departement, sector, rome_label }}
+      />
 
       <div className="mb-4 flex gap-2">
         {newCount > 0 && (
-          <form action={markAllProspectedAction.bind(null, filter)}>
+          <form action={markAllProspectedAction.bind(null, status)}>
             <button
               type="submit"
               className="rounded-md border border-zinc-300 px-3 py-1.5 text-sm transition hover:bg-zinc-50"
@@ -62,7 +118,7 @@ export default async function HomePage({
           </form>
         )}
         <a
-          href={`/api/export?status=${filter}`}
+          href={`/api/export?${exportParams.toString()}`}
           className="rounded-md border border-zinc-300 px-3 py-1.5 text-sm transition hover:bg-zinc-50"
         >
           Export CSV
@@ -71,8 +127,8 @@ export default async function HomePage({
 
       {jobs.length === 0 ? (
         <p className="rounded-md border border-dashed border-zinc-300 p-8 text-center text-sm text-zinc-500">
-          Aucune offre pour l&apos;instant. Clique sur «&nbsp;Ingérer
-          maintenant&nbsp;» pour récupérer les dernières annonces.
+          Aucune offre ne correspond aux filtres. Clique sur «&nbsp;Ingérer
+          maintenant&nbsp;» ou ajuste les filtres ci-dessus.
         </p>
       ) : (
         <JobsTable jobs={jobs} />
@@ -81,19 +137,23 @@ export default async function HomePage({
   );
 }
 
-function FilterTab({
+function StatusTab({
   label,
   value,
   current,
+  preserved,
 }: {
   label: string;
   value: JobFilter;
   current: JobFilter;
+  preserved: URLSearchParams;
 }) {
   const active = current === value;
+  const params = new URLSearchParams(preserved);
+  params.set('status', value);
   return (
     <Link
-      href={`/?status=${value}`}
+      href={`/?${params.toString()}`}
       className={
         active
           ? 'rounded-md bg-zinc-900 px-3 py-1.5 text-white'
@@ -115,7 +175,9 @@ function JobsTable({ jobs }: { jobs: Job[] }) {
             <th className="px-3 py-2 font-medium">Source</th>
             <th className="px-3 py-2 font-medium">Entreprise</th>
             <th className="px-3 py-2 font-medium">Poste</th>
-            <th className="px-3 py-2 font-medium">Localisation</th>
+            <th className="px-3 py-2 font-medium">Dép.</th>
+            <th className="px-3 py-2 font-medium">Métier</th>
+            <th className="px-3 py-2 font-medium">Secteur</th>
             <th className="px-3 py-2 font-medium">Statut</th>
             <th className="px-3 py-2 font-medium">Lien</th>
           </tr>
@@ -123,13 +185,19 @@ function JobsTable({ jobs }: { jobs: Job[] }) {
         <tbody>
           {jobs.map((job) => (
             <tr key={job.id} className="border-t border-zinc-100">
-              <td className="px-3 py-2 text-zinc-600">
+              <td className="whitespace-nowrap px-3 py-2 text-zinc-600">
                 {formatDate(job.posted_at) ?? '—'}
               </td>
               <td className="px-3 py-2">{SOURCE_LABEL[job.source]}</td>
               <td className="px-3 py-2 font-medium">{job.company_name}</td>
               <td className="px-3 py-2">{job.job_title}</td>
-              <td className="px-3 py-2 text-zinc-600">{job.location ?? '—'}</td>
+              <td className="whitespace-nowrap px-3 py-2 text-zinc-600">
+                {job.departement ?? '—'}
+              </td>
+              <td className="px-3 py-2 text-zinc-600">
+                {job.rome_label ?? '—'}
+              </td>
+              <td className="px-3 py-2 text-zinc-600">{job.sector ?? '—'}</td>
               <td className="px-3 py-2">
                 <StatusBadge status={job.status} />
               </td>
