@@ -37,11 +37,16 @@ function initSchema(db: Database.Database): void {
       created_at     text    not null default (datetime('now')),
       departement    text,
       sector         text,
-      rome_label     text
+      rome_label     text,
+      contact_name   text,
+      contact_email  text,
+      contact_phone  text,
+      notes          text,
+      prospected_at  text
     );
   `);
 
-  // 2. Migration pour bases créées avant l'ajout de departement/sector/rome_label.
+  // 2. Migration pour bases créées avant ces colonnes.
   // SQLite n'ayant pas `alter table ... add column if not exists`, on détecte via PRAGMA.
   const existing = new Set(
     (db.pragma('table_info(jobs)') as Array<{ name: string }>).map((c) => c.name),
@@ -50,6 +55,11 @@ function initSchema(db: Database.Database): void {
     ['departement', 'text'],
     ['sector', 'text'],
     ['rome_label', 'text'],
+    ['contact_name', 'text'],
+    ['contact_email', 'text'],
+    ['contact_phone', 'text'],
+    ['notes', 'text'],
+    ['prospected_at', 'text'],
   ];
   for (const [name, type] of newColumns) {
     if (!existing.has(name)) {
@@ -89,6 +99,18 @@ export interface Job {
   departement: string | null;
   sector: string | null;
   rome_label: string | null;
+  contact_name: string | null;
+  contact_email: string | null;
+  contact_phone: string | null;
+  notes: string | null;
+  prospected_at: string | null;
+}
+
+export interface ProspectInput {
+  contact_name: string | null;
+  contact_email: string | null;
+  contact_phone: string | null;
+  notes: string | null;
 }
 
 export interface NewJob {
@@ -145,9 +167,34 @@ export function markAllProspected(filter: JobFilter): number {
   if (filter === 'prospected') return 0;
   const db = getDb();
   const info = db
-    .prepare("update jobs set status = 'prospected' where status = 'new'")
+    .prepare(
+      "update jobs set status = 'prospected', prospected_at = coalesce(prospected_at, datetime('now')) where status = 'new'",
+    )
     .run();
   return info.changes;
+}
+
+// Marque une offre individuelle comme prospectée et enregistre les infos contact.
+// Idempotent : peut être appelé sur une offre déjà prospectée pour mettre à jour
+// les contacts/notes. Le prospected_at n'est fixé qu'à la première bascule.
+export function markProspected(jobId: number, input: ProspectInput): void {
+  const db = getDb();
+  db.prepare(
+    `update jobs
+     set status         = 'prospected',
+         contact_name   = :contact_name,
+         contact_email  = :contact_email,
+         contact_phone  = :contact_phone,
+         notes          = :notes,
+         prospected_at  = coalesce(prospected_at, datetime('now'))
+     where id = :id`,
+  ).run({
+    id: jobId,
+    contact_name: input.contact_name,
+    contact_email: input.contact_email,
+    contact_phone: input.contact_phone,
+    notes: input.notes,
+  });
 }
 
 // Insertion en masse avec déduplication (source, source_url).
