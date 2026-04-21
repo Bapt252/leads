@@ -13,10 +13,11 @@ const TOKEN_URL =
 const SEARCH_URL =
   'https://api.francetravail.io/partenaire/offresdemploi/v2/offres/search';
 
-// Les 8 départements d'Île-de-France.
-const IDF_DEPARTEMENTS = '75,77,78,91,92,93,94,95';
+// L'API France Travail limite une recherche à 5 départements max.
+// On découpe donc l'IDF (8 départements) en 2 batches.
+const IDF_BATCHES = ['75,92,93,94', '77,78,91,95'];
 
-// Limite API : 150 résultats par page, 3000 résultats max au total.
+// Limite API : 150 résultats par page, 3000 résultats max par requête.
 const PAGE_SIZE = 150;
 const MAX_OFFSET = 3000;
 
@@ -51,12 +52,13 @@ async function getAccessToken(env: Env): Promise<string> {
 
 async function searchPage(
   token: string,
+  departements: string,
   minCreationDate: string,
   start: number,
   end: number,
 ): Promise<unknown[]> {
   const url = new URL(SEARCH_URL);
-  url.searchParams.set('departement', IDF_DEPARTEMENTS);
+  url.searchParams.set('departement', departements);
   url.searchParams.set('minCreationDate', minCreationDate);
   url.searchParams.set('range', `${start}-${end}`);
 
@@ -99,12 +101,14 @@ export default {
     try {
       const token = await getAccessToken(env);
       const offres: unknown[] = [];
-      // Pagination : 0-149, 150-299, ... jusqu'à 2850-2999.
-      for (let start = 0; start + PAGE_SIZE <= MAX_OFFSET; start += PAGE_SIZE) {
-        const end = start + PAGE_SIZE - 1;
-        const page = await searchPage(token, minCreationDate, start, end);
-        offres.push(...page);
-        if (page.length < PAGE_SIZE) break;
+      // Pour chaque batch de départements, pagination 0-149, 150-299, ...
+      for (const batch of IDF_BATCHES) {
+        for (let start = 0; start + PAGE_SIZE <= MAX_OFFSET; start += PAGE_SIZE) {
+          const end = start + PAGE_SIZE - 1;
+          const page = await searchPage(token, batch, minCreationDate, start, end);
+          offres.push(...page);
+          if (page.length < PAGE_SIZE) break;
+        }
       }
       return Response.json({ offres, count: offres.length });
     } catch (err) {
