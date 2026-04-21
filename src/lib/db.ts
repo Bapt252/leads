@@ -151,17 +151,25 @@ export function markAllProspected(filter: JobFilter): number {
 }
 
 // Insertion en masse avec déduplication (source, source_url).
-// Retourne le nombre de nouvelles offres réellement insérées.
+// Sur conflit, on backfill uniquement les 3 champs qui peuvent être NULL sur
+// d'anciennes lignes (departement, sector, rome_label) — on ne touche ni au
+// statut, ni aux contacts, ni aux notes pour ne pas écraser le travail
+// manuel de l'utilisateur.
+// Retourne le nombre de lignes impactées (insérées ou backfillées).
 export function insertJobs(jobs: NewJob[]): number {
   if (jobs.length === 0) return 0;
   const db = getDb();
   const stmt = db.prepare(`
-    insert or ignore into jobs
+    insert into jobs
       (source, source_url, company_name, job_title, location, posted_at,
        departement, sector, rome_label)
     values
       (@source, @source_url, @company_name, @job_title, @location, @posted_at,
        @departement, @sector, @rome_label)
+    on conflict(source, source_url) do update set
+      departement = coalesce(jobs.departement, excluded.departement),
+      sector      = coalesce(jobs.sector,      excluded.sector),
+      rome_label  = coalesce(jobs.rome_label,  excluded.rome_label)
   `);
   const insertMany = db.transaction((items: NewJob[]): number => {
     let inserted = 0;
