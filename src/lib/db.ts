@@ -19,7 +19,11 @@ function getDb(): Database.Database {
 }
 
 // Création initiale + migrations idempotentes (ajout de colonnes sur une base existante).
+// L'ordre est important : on crée la table, puis on migre les colonnes manquantes,
+// PUIS seulement on crée les index (sinon un index sur une colonne ajoutée par
+// migration échouerait car SQLite parse le bloc exec en une fois).
 function initSchema(db: Database.Database): void {
+  // 1. Table de base.
   db.exec(`
     create table if not exists jobs (
       id             integer primary key autoincrement,
@@ -35,20 +39,9 @@ function initSchema(db: Database.Database): void {
       sector         text,
       rome_label     text
     );
-
-    create index if not exists idx_jobs_status
-      on jobs (status, posted_at desc);
-    create index if not exists idx_jobs_departement on jobs (departement);
-    create index if not exists idx_jobs_sector      on jobs (sector);
-    create index if not exists idx_jobs_rome        on jobs (rome_label);
-
-    -- Déduplication : une même offre d'une même source ne doit rentrer qu'une fois.
-    create unique index if not exists uq_jobs_source_url
-      on jobs (source, source_url)
-      where source_url is not null;
   `);
 
-  // Migration pour bases créées avant l'ajout de departement/sector/rome_label.
+  // 2. Migration pour bases créées avant l'ajout de departement/sector/rome_label.
   // SQLite n'ayant pas `alter table ... add column if not exists`, on détecte via PRAGMA.
   const existing = new Set(
     (db.pragma('table_info(jobs)') as Array<{ name: string }>).map((c) => c.name),
@@ -63,6 +56,20 @@ function initSchema(db: Database.Database): void {
       db.exec(`alter table jobs add column ${name} ${type}`);
     }
   }
+
+  // 3. Index (à créer après les ALTER pour que les colonnes cibles existent).
+  db.exec(`
+    create index if not exists idx_jobs_status
+      on jobs (status, posted_at desc);
+    create index if not exists idx_jobs_departement on jobs (departement);
+    create index if not exists idx_jobs_sector      on jobs (sector);
+    create index if not exists idx_jobs_rome        on jobs (rome_label);
+
+    -- Déduplication : une même offre d'une même source ne doit rentrer qu'une fois.
+    create unique index if not exists uq_jobs_source_url
+      on jobs (source, source_url)
+      where source_url is not null;
+  `);
 }
 
 export type JobSource = 'france_travail' | 'indeed' | 'linkedin';
