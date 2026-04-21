@@ -54,12 +54,14 @@ async function searchPage(
   token: string,
   departements: string,
   minCreationDate: string,
+  maxCreationDate: string,
   start: number,
   end: number,
 ): Promise<unknown[]> {
   const url = new URL(SEARCH_URL);
   url.searchParams.set('departement', departements);
   url.searchParams.set('minCreationDate', minCreationDate);
+  url.searchParams.set('maxCreationDate', maxCreationDate);
   url.searchParams.set('range', `${start}-${end}`);
 
   const res = await fetch(url, {
@@ -97,6 +99,10 @@ export default {
         status: 400,
       });
     }
+    // L'API exige min et max ensemble ; on fige max = maintenant pour toute
+    // l'opération afin d'éviter qu'une offre arrivée pendant la pagination
+    // ne décale les résultats.
+    const maxCreationDate = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
 
     try {
       const token = await getAccessToken(env);
@@ -105,7 +111,14 @@ export default {
       for (const batch of IDF_BATCHES) {
         for (let start = 0; start + PAGE_SIZE <= MAX_OFFSET; start += PAGE_SIZE) {
           const end = start + PAGE_SIZE - 1;
-          const page = await searchPage(token, batch, minCreationDate, start, end);
+          const page = await searchPage(
+            token,
+            batch,
+            minCreationDate,
+            maxCreationDate,
+            start,
+            end,
+          );
           offres.push(...page);
           if (page.length < PAGE_SIZE) break;
         }
