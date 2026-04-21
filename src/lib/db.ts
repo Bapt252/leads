@@ -18,7 +18,7 @@ function getDb(): Database.Database {
   return globalForDb.__leadsDb;
 }
 
-// Schéma minimal — une seule table, idempotent via `create ... if not exists`.
+// Création initiale + migrations idempotentes (ajout de colonnes sur une base existante).
 function initSchema(db: Database.Database): void {
   db.exec(`
     create table if not exists jobs (
@@ -30,17 +30,39 @@ function initSchema(db: Database.Database): void {
       location       text,
       posted_at      text,
       status         text    not null default 'new' check (status in ('new','prospected')),
-      created_at     text    not null default (datetime('now'))
+      created_at     text    not null default (datetime('now')),
+      departement    text,
+      sector         text,
+      rome_label     text
     );
 
     create index if not exists idx_jobs_status
       on jobs (status, posted_at desc);
+    create index if not exists idx_jobs_departement on jobs (departement);
+    create index if not exists idx_jobs_sector      on jobs (sector);
+    create index if not exists idx_jobs_rome        on jobs (rome_label);
 
     -- Déduplication : une même offre d'une même source ne doit rentrer qu'une fois.
     create unique index if not exists uq_jobs_source_url
       on jobs (source, source_url)
       where source_url is not null;
   `);
+
+  // Migration pour bases créées avant l'ajout de departement/sector/rome_label.
+  // SQLite n'ayant pas `alter table ... add column if not exists`, on détecte via PRAGMA.
+  const existing = new Set(
+    (db.pragma('table_info(jobs)') as Array<{ name: string }>).map((c) => c.name),
+  );
+  const newColumns: Array<[string, string]> = [
+    ['departement', 'text'],
+    ['sector', 'text'],
+    ['rome_label', 'text'],
+  ];
+  for (const [name, type] of newColumns) {
+    if (!existing.has(name)) {
+      db.exec(`alter table jobs add column ${name} ${type}`);
+    }
+  }
 }
 
 export type JobSource = 'france_travail' | 'indeed' | 'linkedin';
@@ -57,6 +79,9 @@ export interface Job {
   posted_at: string | null;
   status: JobStatus;
   created_at: string;
+  departement: string | null;
+  sector: string | null;
+  rome_label: string | null;
 }
 
 export interface NewJob {
@@ -66,18 +91,44 @@ export interface NewJob {
   job_title: string;
   location?: string | null;
   posted_at?: string | null;
+  departement?: string | null;
+  sector?: string | null;
+  rome_label?: string | null;
+}
+
+export interface JobQuery {
+  status: JobFilter;
+  departement?: string;
+  sector?: string;
+  rome_label?: string;
 }
 
 // Liste les offres filtrées, triées des plus récentes aux plus anciennes.
-export function getJobs(filter: JobFilter): Job[] {
+export function getJobs(query: JobQuery): Job[] {
   const db = getDb();
-  const orderBy = 'order by coalesce(posted_at, created_at) desc';
-  if (filter === 'all') {
-    return db.prepare(`select * from jobs ${orderBy}`).all() as Job[];
+  const where: string[] = [];
+  const params: unknown[] = [];
+
+  if (query.status !== 'all') {
+    where.push('status = ?');
+    params.push(query.status);
   }
-  return db
-    .prepare(`select * from jobs where status = ? ${orderBy}`)
-    .all(filter) as Job[];
+  if (query.departement) {
+    where.push('departement = ?');
+    params.push(query.departement);
+  }
+  if (query.sector) {
+    where.push('sector = ?');
+    params.push(query.sector);
+  }
+  if (query.rome_label) {
+    where.push('rome_label = ?');
+    params.push(query.rome_label);
+  }
+
+  const whereSql = where.length > 0 ? `where ${where.join(' and ')}` : '';
+  const sql = `select * from jobs ${whereSql} order by coalesce(posted_at, created_at) desc`;
+  return db.prepare(sql).all(...params) as Job[];
 }
 
 // Bascule toutes les offres "new" en "prospected" dans une seule transaction.
@@ -99,9 +150,11 @@ export function insertJobs(jobs: NewJob[]): number {
   const db = getDb();
   const stmt = db.prepare(`
     insert or ignore into jobs
-      (source, source_url, company_name, job_title, location, posted_at)
+      (source, source_url, company_name, job_title, location, posted_at,
+       departement, sector, rome_label)
     values
-      (@source, @source_url, @company_name, @job_title, @location, @posted_at)
+      (@source, @source_url, @company_name, @job_title, @location, @posted_at,
+       @departement, @sector, @rome_label)
   `);
   const insertMany = db.transaction((items: NewJob[]): number => {
     let inserted = 0;
@@ -113,10 +166,27 @@ export function insertJobs(jobs: NewJob[]): number {
         job_title: j.job_title,
         location: j.location ?? null,
         posted_at: j.posted_at ?? null,
+        departement: j.departement ?? null,
+        sector: j.sector ?? null,
+        rome_label: j.rome_label ?? null,
       });
       inserted += info.changes;
     }
     return inserted;
   });
   return insertMany(jobs);
+}
+
+// Liste les valeurs distinctes d'une colonne pour alimenter les dropdowns de filtre.
+// La colonne est whitelistée au type (pas d'injection possible).
+export function getDistinctValues(
+  column: 'departement' | 'sector' | 'rome_label',
+): string[] {
+  const db = getDb();
+  const rows = db
+    .prepare(
+      `select distinct ${column} as v from jobs where ${column} is not null and ${column} != '' order by ${column}`,
+    )
+    .all() as Array<{ v: string }>;
+  return rows.map((r) => r.v);
 }

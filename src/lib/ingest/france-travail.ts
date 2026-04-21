@@ -15,9 +15,11 @@ interface FTOffre {
   id: string;
   intitule: string;
   dateCreation: string;
-  lieuTravail?: { libelle?: string };
+  lieuTravail?: { libelle?: string; codePostal?: string };
   entreprise?: { nom?: string };
   origineOffre?: { urlOrigine?: string };
+  secteurActiviteLibelle?: string;
+  romeLibelle?: string;
 }
 
 interface WorkerResponse {
@@ -47,6 +49,12 @@ function startOfTodayParisIso(): string {
 
 // Convertit une offre France Travail vers notre format de DB.
 function mapOffre(offre: FTOffre): NewJob {
+  // Département extrait des 2 premiers chiffres du code postal (fonctionne
+  // pour tous les départements IDF ; à adapter si on élargit à la Corse).
+  const codePostal = offre.lieuTravail?.codePostal;
+  const departement =
+    codePostal && /^\d{5}$/.test(codePostal) ? codePostal.slice(0, 2) : null;
+
   return {
     source: 'france_travail',
     source_url:
@@ -57,6 +65,9 @@ function mapOffre(offre: FTOffre): NewJob {
     job_title: offre.intitule,
     location: offre.lieuTravail?.libelle ?? null,
     posted_at: offre.dateCreation,
+    departement,
+    sector: offre.secteurActiviteLibelle ?? null,
+    rome_label: offre.romeLibelle ?? null,
   };
 }
 
