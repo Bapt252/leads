@@ -166,7 +166,7 @@ export function insertJobs(jobs: NewJob[]): number {
     values
       (@source, @source_url, @company_name, @job_title, @location, @posted_at,
        @departement, @sector, @rome_label)
-    on conflict(source, source_url) do update set
+    on conflict(source, source_url) where source_url is not null do update set
       departement = coalesce(jobs.departement, excluded.departement),
       sector      = coalesce(jobs.sector,      excluded.sector),
       rome_label  = coalesce(jobs.rome_label,  excluded.rome_label)
