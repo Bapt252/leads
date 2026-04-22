@@ -261,17 +261,28 @@ async function handleIngestFT(env) {
   return Response.json({ ok: true, message: 'Workflow enrich déclenché' });
 }
 
-// Endpoint de diagnostic : teste le GITHUB_KEY en appelant /user.
+// Endpoint de diagnostic : teste le GITHUB_KEY en appelant /user +
+// liste les noms (sans valeurs) de tous les bindings env disponibles.
 async function handleDebugGithub(env) {
+  // Liste de TOUS les noms de bindings que le Worker voit — permet de
+  // détecter un mauvais cas (GITHUBKEY vs GITHUB_KEY) ou un binding
+  // absent que le dashboard afficherait pourtant.
+  const envKeys = Object.keys(env).sort();
+
   const key = env.GITHUB_KEY;
   if (!key) {
-    return Response.json({ ok: false, error: 'GITHUB_KEY absent dans Cloudflare' });
+    return Response.json({
+      ok: false,
+      error: 'GITHUB_KEY absent dans env du Worker',
+      bindings_visibles_par_le_worker: envKeys,
+    });
   }
   const res = await fetch('https://api.github.com/user', {
     headers: ghHeaders(env),
   });
   const body = await res.text();
   return Response.json({
+    bindings_visibles_par_le_worker: envKeys,
     token_length: key.length,
     token_prefix: key.slice(0, 4),
     token_has_whitespace: /\s/.test(key),
