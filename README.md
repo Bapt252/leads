@@ -80,7 +80,8 @@ Via le dashboard Cloudflare (Worker `leads-france-travail` → Settings) :
 - `FRANCE_TRAVAIL_CLIENT_SECRET`
 - `SHARED_API_KEY` — clé partagée pour l'auth X-API-Key
 - `GITHUB_KEY` — PAT fine-grained avec droit Contents R/W sur ce repo uniquement
-- `GITHUB_REPO` — `Bapt252/leads`
+
+Le repo cible (`Bapt252/leads`) est hardcodé dans le code du Worker.
 
 ## Endpoints du Worker
 

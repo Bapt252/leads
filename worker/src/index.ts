@@ -12,8 +12,10 @@ interface Env {
   FRANCE_TRAVAIL_CLIENT_SECRET: string;
   SHARED_API_KEY: string;
   GITHUB_KEY: string;
-  GITHUB_REPO: string; // ex : "Bapt252/leads"
 }
+
+// Repo cible hardcodé (pas un secret : c'est une valeur publique).
+const GITHUB_REPO = 'Bapt252/leads';
 
 // ----------------------------------------------------------------------------
 // Partie France Travail (inchangée).
@@ -188,7 +190,7 @@ async function getLeadsFile(
   env: Env,
 ): Promise<{ store: LeadsStore; sha: string }> {
   const res = await fetch(
-    `https://api.github.com/repos/${env.GITHUB_REPO}/contents/${LEADS_PATH}`,
+    `https://api.github.com/repos/${GITHUB_REPO}/contents/${LEADS_PATH}`,
     { headers: ghHeaders(env) },
   );
   if (!res.ok) {
@@ -210,7 +212,7 @@ async function putLeadsFile(
 ): Promise<void> {
   const content = JSON.stringify(store, null, 2) + '\n';
   const res = await fetch(
-    `https://api.github.com/repos/${env.GITHUB_REPO}/contents/${LEADS_PATH}`,
+    `https://api.github.com/repos/${GITHUB_REPO}/contents/${LEADS_PATH}`,
     {
       method: 'PUT',
       headers: ghHeaders(env),
@@ -228,7 +230,7 @@ async function putLeadsFile(
 
 async function dispatchEnrich(env: Env): Promise<void> {
   const res = await fetch(
-    `https://api.github.com/repos/${env.GITHUB_REPO}/actions/workflows/${ENRICH_WORKFLOW}/dispatches`,
+    `https://api.github.com/repos/${GITHUB_REPO}/actions/workflows/${ENRICH_WORKFLOW}/dispatches`,
     {
       method: 'POST',
       headers: ghHeaders(env),

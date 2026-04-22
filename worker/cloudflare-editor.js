@@ -7,7 +7,8 @@
 //   - FRANCE_TRAVAIL_CLIENT_SECRET
 //   - SHARED_API_KEY       : clé partagée header X-API-Key
 //   - GITHUB_KEY           : PAT fine-grained, Contents R/W sur Bapt252/leads
-//   - GITHUB_REPO          : "Bapt252/leads"
+//
+// Repo cible : hardcodé dans la constante GITHUB_REPO ci-dessous.
 //
 // Endpoints :
 //   - GET   /offres                         proxy France Travail
@@ -92,6 +93,7 @@ async function handleOffres(req, env) {
 // Partie GitHub (nouveau).
 // ----------------------------------------------------------------------------
 
+const GITHUB_REPO = 'Bapt252/leads';
 const LEADS_PATH = 'public/data/leads.json';
 const ENRICH_WORKFLOW = 'enrich.yml';
 
@@ -114,7 +116,7 @@ function toBase64(str) {
 
 async function getLeadsFile(env) {
   const res = await fetch(
-    `https://api.github.com/repos/${env.GITHUB_REPO}/contents/${LEADS_PATH}`,
+    `https://api.github.com/repos/${GITHUB_REPO}/contents/${LEADS_PATH}`,
     { headers: ghHeaders(env) },
   );
   if (!res.ok) {
@@ -131,7 +133,7 @@ async function getLeadsFile(env) {
 async function putLeadsFile(env, store, sha, message) {
   const content = JSON.stringify(store, null, 2) + '\n';
   const res = await fetch(
-    `https://api.github.com/repos/${env.GITHUB_REPO}/contents/${LEADS_PATH}`,
+    `https://api.github.com/repos/${GITHUB_REPO}/contents/${LEADS_PATH}`,
     {
       method: 'PUT',
       headers: ghHeaders(env),
@@ -148,7 +150,7 @@ async function putLeadsFile(env, store, sha, message) {
 
 async function dispatchEnrich(env) {
   const res = await fetch(
-    `https://api.github.com/repos/${env.GITHUB_REPO}/actions/workflows/${ENRICH_WORKFLOW}/dispatches`,
+    `https://api.github.com/repos/${GITHUB_REPO}/actions/workflows/${ENRICH_WORKFLOW}/dispatches`,
     {
       method: 'POST',
       headers: ghHeaders(env),
