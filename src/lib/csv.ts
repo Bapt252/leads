@@ -1,4 +1,4 @@
-import type { Job } from './db';
+import type { Job } from './store';
 
 // Échappe une cellule selon RFC 4180 (guillemets autour si ",", "\"", "\n" ou "\r").
 function escapeCell(value: string | number | null | undefined): string {

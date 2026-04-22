@@ -5,54 +5,90 @@ Outil interne de prospection B2B pour **Tenex** (plateforme de recrutement).
 ## Objectif
 
 Ingérer les offres d'emploi publiées en **Île-de-France** sur **France Travail**,
-**Indeed** et **LinkedIn**, les afficher dans une liste unique, permettre de
-marquer une vue entière en « prospecté » en un clic, et exporter la sélection
-courante en CSV.
+les afficher dans une liste unique, permettre de marquer chaque offre comme
+« prospecté » avec un contact, et exporter la sélection courante en CSV.
+
+## Architecture
+
+Site 100% statique (GitHub Pages) avec persistance via commits dans le repo :
+
+```
+┌─ GitHub Pages (bapt252.github.io/leads) ─ site static Next.js
+│     │
+│     ↓ fetch (lecture publique, sans auth)
+│  public/data/leads.json  ← source unique dans le repo
+│     ↑ écrit                     ↑ écrit
+│  Cloudflare Worker           GitHub Actions (cron journalier)
+│  (PATCH user fields           (enrich.ts : appel API France Travail
+│   via API GitHub)              + merge delta dans leads.json)
+└───────────────────────────────────────────────────────────────────
+```
 
 ## Stack
 
-- Next.js 16 (App Router) + React 19 + TypeScript strict
+- Next.js 16 (App Router, export static) + React 19 + TypeScript strict
 - Tailwind CSS v4
-- SQLite local via `better-sqlite3` — fichier `leads.db` à la racine (gitignored)
-- `zod` pour valider les payloads d'ingestion
-
-Pas d'auth : outil local, lancé via `npm run dev` sur la machine de l'utilisateur.
+- Cloudflare Worker (proxy API France Travail + proxy écriture GitHub)
+- GitHub Actions (cron enrichissement + déploiement Pages)
 
 ## Prérequis
 
-- Node.js ≥ 20 (testé avec 22.14)
+- Node.js ≥ 20
 - npm
+- Compte Cloudflare + compte GitHub (pour les Workers et GitHub Pages)
 
-## Setup
+## Développement local
 
 ```bash
 npm install
-cp .env.example .env
-# Renseigner les variables au fur et à mesure que les connecteurs seront branchés.
+# Créer un .env avec l'URL du Worker :
+# NEXT_PUBLIC_WORKER_URL=https://leads-france-travail.baptiste-coma.workers.dev
 npm run dev
 ```
 
-Ouvrir http://localhost:3000.
-
-## État d'avancement
-
-- ✅ Liste des offres, filtre `new` / `prospected` / `all`
-- ✅ Bouton « Tout marquer prospecté » (bascule groupée de la vue courante)
-- ✅ Export CSV de la vue courante (`/api/export?status=…`)
-- ⏳ Connecteurs d'ingestion : **squelettes vides** renvoyant 0 offre
-  - `/api/ingest/france-travail` — à brancher à l'API France Travail (OAuth2)
-  - `/api/ingest/indeed` — approche à choisir (pas d'API publique officielle)
-  - `/api/ingest/linkedin` — approche à choisir (pas d'API publique officielle)
+Ouvrir http://localhost:3000. Au premier write, le site demande la clé API
+Worker (stockée dans localStorage).
 
 ## Commandes
 
 - `npm run dev` — serveur de développement
-- `npm run build` — build de production
-- `npm run start` — serveur de production
+- `npm run build` — build de production (export static dans `out/`)
 - `npm run lint` — ESLint
+- `npm run enrich` — lance le script d'enrichissement en local (nécessite
+  `FRANCE_TRAVAIL_WORKER_URL` et `FRANCE_TRAVAIL_WORKER_KEY` dans l'env)
 
 ## Déploiement
 
-Prévu sur Vercel (à venir). Attention : `better-sqlite3` ne fonctionne pas sur
-du serverless sans filesystem persistant — le jour où on déploie, il faudra
-basculer sur Turso / Neon, ou garder l'outil strictement en local.
+Tout est automatisé via GitHub Actions :
+
+| Workflow | Déclencheur | Action |
+|---|---|---|
+| `enrich.yml` | Cron 6h UTC + bouton UI | Appelle l'API FT, merge delta, commit `leads.json` |
+| `deploy.yml` | Push sur `main` | Build static + publie sur GitHub Pages |
+
+### Secrets GitHub Actions à configurer
+
+Settings → Secrets and variables → Actions :
+- `FRANCE_TRAVAIL_WORKER_URL` (secret)
+- `FRANCE_TRAVAIL_WORKER_KEY` (secret — vs `SHARED_API_KEY` du Worker)
+- `NEXT_PUBLIC_WORKER_URL` (variable, pas secret — exposée au bundle)
+
+### Secrets Cloudflare Worker à configurer
+
+Via le dashboard Cloudflare (Worker `leads-france-travail` → Settings) :
+- `FRANCE_TRAVAIL_CLIENT_ID`
+- `FRANCE_TRAVAIL_CLIENT_SECRET`
+- `SHARED_API_KEY` — clé partagée pour l'auth X-API-Key
+- `GITHUB_KEY` — PAT fine-grained avec droit Contents R/W sur ce repo uniquement
+- `GITHUB_REPO` — `Bapt252/leads`
+
+## Endpoints du Worker
+
+| Méthode | Chemin | Rôle |
+|---|---|---|
+| GET | `/offres?minCreationDate=…` | Proxy API France Travail (utilisé par `enrich.ts`) |
+| POST | `/ingest/france-travail` | Déclenche manuellement le workflow `enrich.yml` |
+| PATCH | `/leads/:id` | Modifie les champs user (status, contact_*, notes) d'une offre |
+| POST | `/leads/mark-all-prospected` | Body `{ ids: string[] }` — bascule en masse |
+
+Tous les endpoints exigent le header `X-API-Key` = `SHARED_API_KEY`.

@@ -1,29 +1,68 @@
 'use client';
 
-import { useRef } from 'react';
-import { prospectAction } from './actions';
-import type { Job } from '@/lib/db';
+import { useRef, useState, type FormEvent } from 'react';
+import { patchLead, type Job } from '@/lib/store';
 
 // Bouton par ligne + modal natif <dialog> avec un formulaire contact.
-// Le formulaire est soumis via Server Action : la modal se ferme
-// immédiatement au submit (optimiste), le revalidatePath côté serveur
-// rafraîchit la table.
+// Le submit appelle le Worker Cloudflare (PATCH /leads/:id), puis demande
+// au parent de recharger le store.
 
 interface Props {
   job: Pick<
     Job,
-    'id' | 'status' | 'contact_name' | 'contact_email' | 'contact_phone' | 'notes' | 'company_name' | 'job_title'
+    | 'id'
+    | 'status'
+    | 'contact_name'
+    | 'contact_email'
+    | 'contact_phone'
+    | 'notes'
+    | 'company_name'
+    | 'job_title'
   >;
+  onUpdated: () => Promise<void>;
 }
 
-export function ProspectButton({ job }: Props) {
+// Normalise une chaîne trim'ée : '' → null.
+function emptyToNull(value: FormDataEntryValue | null): string | null {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  return trimmed === '' ? null : trimmed;
+}
+
+export function ProspectButton({ job, onUpdated }: Props) {
   const dialogRef = useRef<HTMLDialogElement>(null);
+  const [saving, setSaving] = useState(false);
 
   const isProspected = job.status === 'prospected';
   const buttonLabel = isProspected ? 'Éditer' : 'Prospecter';
   const buttonClass = isProspected
     ? 'rounded-md border border-zinc-300 px-2 py-1 text-xs text-zinc-700 transition hover:bg-zinc-50'
     : 'rounded-md bg-zinc-900 px-2 py-1 text-xs text-white transition hover:bg-zinc-700';
+
+  async function handleSubmit(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    if (saving) return;
+    const data = new FormData(e.currentTarget);
+    setSaving(true);
+    try {
+      await patchLead(job.id, {
+        status: 'prospected',
+        contact_name: emptyToNull(data.get('contact_name')),
+        contact_email: emptyToNull(data.get('contact_email')),
+        contact_phone: emptyToNull(data.get('contact_phone')),
+        notes: emptyToNull(data.get('notes')),
+      });
+      dialogRef.current?.close();
+      await onUpdated();
+    } catch (err) {
+      // Affichage simple dans la modal via alert — l'UI reste minimale.
+      window.alert(
+        `Échec : ${err instanceof Error ? err.message : String(err)}`,
+      );
+    } finally {
+      setSaving(false);
+    }
+  }
 
   return (
     <>
@@ -40,8 +79,7 @@ export function ProspectButton({ job }: Props) {
         className="rounded-lg border border-zinc-200 p-0 shadow-xl backdrop:bg-black/40"
       >
         <form
-          action={prospectAction}
-          onSubmit={() => dialogRef.current?.close()}
+          onSubmit={handleSubmit}
           className="flex w-[420px] flex-col gap-3 p-6"
         >
           <div>
@@ -52,8 +90,6 @@ export function ProspectButton({ job }: Props) {
               {job.company_name} — {job.job_title}
             </p>
           </div>
-
-          <input type="hidden" name="job_id" value={job.id} />
 
           <Field
             label="Nom du contact"
@@ -92,14 +128,16 @@ export function ProspectButton({ job }: Props) {
               type="button"
               onClick={() => dialogRef.current?.close()}
               className="rounded-md border border-zinc-300 px-3 py-1.5 text-sm text-zinc-700 transition hover:bg-zinc-50"
+              disabled={saving}
             >
               Annuler
             </button>
             <button
               type="submit"
-              className="rounded-md bg-zinc-900 px-3 py-1.5 text-sm font-medium text-white transition hover:bg-zinc-700"
+              disabled={saving}
+              className="rounded-md bg-zinc-900 px-3 py-1.5 text-sm font-medium text-white transition hover:bg-zinc-700 disabled:opacity-50"
             >
-              Enregistrer
+              {saving ? 'Enregistrement…' : 'Enregistrer'}
             </button>
           </div>
         </form>
