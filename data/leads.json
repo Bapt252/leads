@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updated_at": "2026-04-22T15:44:23.582Z",
+  "updated_at": "2026-04-22T15:45:22.659Z",
   "jobs": [
     {
       "id": "ft:207HXXS",
@@ -71346,6 +71346,44 @@
       "notes": null,
       "prospected_at": null,
       "created_at": "2026-04-22T15:44:23.582Z"
+    },
+    {
+      "id": "ft:207HYMD",
+      "source": "france_travail",
+      "source_url": "https://candidat.francetravail.fr/offres/recherche/detail/207HYMD",
+      "company_name": "MENWAY EMPLOI",
+      "job_title": "Démonstrateur(trice) matériel médical H/F",
+      "location": "91 - Corbeil-Essonnes",
+      "posted_at": "2026-04-22T15:44:57.037Z",
+      "departement": "91",
+      "sector": "Activités des agences de travail temporaire",
+      "rome_label": "Technico-commercial / Technico-commerciale",
+      "status": "new",
+      "contact_name": null,
+      "contact_email": null,
+      "contact_phone": null,
+      "notes": null,
+      "prospected_at": null,
+      "created_at": "2026-04-22T15:45:22.659Z"
+    },
+    {
+      "id": "ft:207HYLM",
+      "source": "france_travail",
+      "source_url": "https://candidat.francetravail.fr/offres/recherche/detail/207HYLM",
+      "company_name": "FAM",
+      "job_title": "AIDES SOIGNANT DE NUIT H/F (H/F)",
+      "location": "95 - SOISY SOUS MONTMORENCY",
+      "posted_at": "2026-04-22T15:44:32.199Z",
+      "departement": "95",
+      "sector": "Hébergement social pour handicapés mentaux et malades mentaux",
+      "rome_label": "Aide-soignant / Aide-soignante",
+      "status": "new",
+      "contact_name": null,
+      "contact_email": null,
+      "contact_phone": null,
+      "notes": null,
+      "prospected_at": null,
+      "created_at": "2026-04-22T15:45:22.659Z"
     }
   ]
 }
