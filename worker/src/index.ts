@@ -360,12 +360,39 @@ async function handleIngestFT(env: Env): Promise<Response> {
 // Routeur.
 // ----------------------------------------------------------------------------
 
+// Headers CORS appliqués à toutes les réponses.
+// On autorise toute origine : la vraie protection est le header X-API-Key,
+// et ce Worker est lui-même destiné à être appelé depuis un front public.
+const CORS_HEADERS: Record<string, string> = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET, POST, PATCH, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type, X-API-Key',
+  'Access-Control-Max-Age': '86400',
+};
+
+function withCors(res: Response): Response {
+  const headers = new Headers(res.headers);
+  for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v);
+  return new Response(res.body, {
+    status: res.status,
+    statusText: res.statusText,
+    headers,
+  });
+}
+
 export default {
   async fetch(req: Request, env: Env): Promise<Response> {
+    // Preflight CORS : le browser envoie OPTIONS avant tout PATCH/POST avec
+    // custom header (ici X-API-Key). On répond avant l'auth pour ne pas
+    // renvoyer 401 sur un preflight (ce qui bloquerait la vraie requête).
+    if (req.method === 'OPTIONS') {
+      return new Response(null, { status: 204, headers: CORS_HEADERS });
+    }
+
     // Auth via secret partagé.
     const providedKey = req.headers.get('X-API-Key');
     if (!env.SHARED_API_KEY || providedKey !== env.SHARED_API_KEY) {
-      return new Response('Unauthorized', { status: 401 });
+      return withCors(new Response('Unauthorized', { status: 401 }));
     }
 
     const url = new URL(req.url);
@@ -375,30 +402,30 @@ export default {
     try {
       // GET /offres — proxy France Travail (inchangé).
       if (method === 'GET' && path === '/offres') {
-        return await handleOffres(req, env);
+        return withCors(await handleOffres(req, env));
       }
 
       // POST /ingest/france-travail — déclenche l'ingestion manuelle.
       if (method === 'POST' && path === '/ingest/france-travail') {
-        return await handleIngestFT(env);
+        return withCors(await handleIngestFT(env));
       }
 
       // POST /leads/mark-all-prospected — bascule en masse.
       if (method === 'POST' && path === '/leads/mark-all-prospected') {
-        return await handleMarkAllProspected(req, env);
+        return withCors(await handleMarkAllProspected(req, env));
       }
 
       // PATCH /leads/:id — modifie un lead.
       const match = path.match(/^\/leads\/(.+)$/);
       if (method === 'PATCH' && match) {
-        return await handlePatchLead(req, env, decodeURIComponent(match[1]));
+        return withCors(await handlePatchLead(req, env, decodeURIComponent(match[1])));
       }
 
-      return new Response('Not found', { status: 404 });
+      return withCors(new Response('Not found', { status: 404 }));
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       console.error('[worker] erreur :', msg);
-      return new Response(msg, { status: 502 });
+      return withCors(new Response(msg, { status: 502 }));
     }
   },
 } satisfies ExportedHandler<Env>;

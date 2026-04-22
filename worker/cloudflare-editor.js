@@ -264,11 +264,36 @@ async function handleIngestFT(env) {
 // Routeur.
 // ----------------------------------------------------------------------------
 
+// Headers CORS appliqués à toutes les réponses. On autorise toute origine
+// car la vraie protection est le header X-API-Key.
+const CORS_HEADERS = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET, POST, PATCH, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type, X-API-Key',
+  'Access-Control-Max-Age': '86400',
+};
+
+function withCors(res) {
+  const headers = new Headers(res.headers);
+  for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v);
+  return new Response(res.body, {
+    status: res.status,
+    statusText: res.statusText,
+    headers,
+  });
+}
+
 export default {
   async fetch(req, env) {
+    // Preflight CORS : le browser envoie OPTIONS avant tout PATCH/POST avec
+    // custom header. On répond avant l'auth pour ne pas 401 sur un preflight.
+    if (req.method === 'OPTIONS') {
+      return new Response(null, { status: 204, headers: CORS_HEADERS });
+    }
+
     const providedKey = req.headers.get('X-API-Key');
     if (!env.SHARED_API_KEY || providedKey !== env.SHARED_API_KEY) {
-      return new Response('Unauthorized', { status: 401 });
+      return withCors(new Response('Unauthorized', { status: 401 }));
     }
 
     const url = new URL(req.url);
@@ -277,24 +302,24 @@ export default {
 
     try {
       if (method === 'GET' && path === '/offres') {
-        return await handleOffres(req, env);
+        return withCors(await handleOffres(req, env));
       }
       if (method === 'POST' && path === '/ingest/france-travail') {
-        return await handleIngestFT(env);
+        return withCors(await handleIngestFT(env));
       }
       if (method === 'POST' && path === '/leads/mark-all-prospected') {
-        return await handleMarkAllProspected(req, env);
+        return withCors(await handleMarkAllProspected(req, env));
       }
       const match = path.match(/^\/leads\/(.+)$/);
       if (method === 'PATCH' && match) {
-        return await handlePatchLead(req, env, decodeURIComponent(match[1]));
+        return withCors(await handlePatchLead(req, env, decodeURIComponent(match[1])));
       }
 
-      return new Response('Not found', { status: 404 });
+      return withCors(new Response('Not found', { status: 404 }));
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       console.error('[worker] erreur :', msg);
-      return new Response(msg, { status: 502 });
+      return withCors(new Response(msg, { status: 502 }));
     }
   },
 };
