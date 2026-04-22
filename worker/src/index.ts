@@ -129,11 +129,57 @@ const ENRICH_WORKFLOW = 'enrich.yml';
 
 type JobStatus = 'new' | 'prospected';
 
+type AccountStage =
+  | 'nouveau'
+  | 'contacte'
+  | 'relance'
+  | 'rdv'
+  | 'qualifie'
+  | 'gagne'
+  | 'perdu';
+
+const ACCOUNT_STAGES: readonly AccountStage[] = [
+  'nouveau',
+  'contacte',
+  'relance',
+  'rdv',
+  'qualifie',
+  'gagne',
+  'perdu',
+] as const;
+
+type ActivityKind = 'stage_change' | 'note' | 'contact' | 'system';
+
+interface ActivityEntry {
+  at: string;
+  kind: ActivityKind;
+  message: string;
+  stage_from?: AccountStage;
+  stage_to?: AccountStage;
+}
+
+interface Account {
+  id: string;
+  company_name: string;
+  stage: AccountStage;
+  contact_name: string | null;
+  contact_email: string | null;
+  contact_phone: string | null;
+  notes: string | null;
+  last_contact_at: string | null;
+  next_action: string | null;
+  next_action_at: string | null;
+  activity: ActivityEntry[];
+  created_at: string;
+  updated_at: string;
+}
+
 interface Job {
   id: string;
   source: 'france_travail';
   source_url: string | null;
   company_name: string;
+  account_id: string;
   job_title: string;
   location: string | null;
   posted_at: string | null;
@@ -150,8 +196,9 @@ interface Job {
 }
 
 interface LeadsStore {
-  version: 1;
+  version: 2;
   updated_at: string;
+  accounts: Account[];
   jobs: Job[];
 }
 
@@ -161,6 +208,34 @@ interface LeadPatch {
   contact_email?: string | null;
   contact_phone?: string | null;
   notes?: string | null;
+}
+
+interface AccountPatch {
+  stage?: AccountStage;
+  contact_name?: string | null;
+  contact_email?: string | null;
+  contact_phone?: string | null;
+  notes?: string | null;
+  next_action?: string | null;
+  next_action_at?: string | null;
+  last_contact_at?: string | null;
+}
+
+// Normalise un nom d'entreprise pour la dédup (même logique que src/lib/store.ts).
+function normalizeCompanyName(name: string): string {
+  return name
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/\p{Diacritic}/gu, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+// ID stable d'Account dérivé du nom normalisé (choix A : dédup sur company_name).
+function accountIdFor(companyName: string): string {
+  const n = normalizeCompanyName(companyName);
+  const slug = n.replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 80);
+  return slug || 'entreprise-inconnue';
 }
 
 interface GhContent {

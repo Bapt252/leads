@@ -12,11 +12,47 @@ const LEADS_PATH = 'data/leads.json';
 export type JobSource = 'france_travail';
 export type JobStatus = 'new' | 'prospected';
 
+export type AccountStage =
+  | 'nouveau'
+  | 'contacte'
+  | 'relance'
+  | 'rdv'
+  | 'qualifie'
+  | 'gagne'
+  | 'perdu';
+
+export type ActivityKind = 'stage_change' | 'note' | 'contact' | 'system';
+
+export interface ActivityEntry {
+  at: string;
+  kind: ActivityKind;
+  message: string;
+  stage_from?: AccountStage;
+  stage_to?: AccountStage;
+}
+
+export interface Account {
+  id: string;
+  company_name: string;
+  stage: AccountStage;
+  contact_name: string | null;
+  contact_email: string | null;
+  contact_phone: string | null;
+  notes: string | null;
+  last_contact_at: string | null;
+  next_action: string | null;
+  next_action_at: string | null;
+  activity: ActivityEntry[];
+  created_at: string;
+  updated_at: string;
+}
+
 export interface Job {
   id: string;
   source: JobSource;
   source_url: string | null;
   company_name: string;
+  account_id: string;
   job_title: string;
   location: string | null;
   posted_at: string | null;
@@ -33,9 +69,27 @@ export interface Job {
 }
 
 export interface LeadsStore {
-  version: 1;
+  version: 2;
   updated_at: string;
+  accounts: Account[];
   jobs: Job[];
+}
+
+// Normalise un nom d'entreprise pour la dédup (même logique que src/lib/store.ts).
+export function normalizeCompanyName(name: string): string {
+  return name
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/\p{Diacritic}/gu, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+// ID stable d'Account dérivé du nom normalisé (choix A : dédup sur company_name).
+export function accountIdFor(companyName: string): string {
+  const n = normalizeCompanyName(companyName);
+  const slug = n.replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 80);
+  return slug || 'entreprise-inconnue';
 }
 
 interface FTOffre {
@@ -90,7 +144,12 @@ async function loadStore(): Promise<LeadsStore> {
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
       console.log('[enrich] leads.json absent, initialisation');
-      return { version: 1, updated_at: new Date().toISOString(), jobs: [] };
+      return {
+        version: 2,
+        updated_at: new Date().toISOString(),
+        accounts: [],
+        jobs: [],
+      };
     }
     throw err;
   }
@@ -173,6 +232,7 @@ function mergeDelta(
     } else {
       const job: Job = {
         ...source,
+        account_id: accountIdFor(source.company_name),
         status: 'new',
         contact_name: null,
         contact_email: null,
