@@ -260,6 +260,25 @@ async function handleIngestFT(env) {
   return Response.json({ ok: true, message: 'Workflow enrich déclenché' });
 }
 
+// Endpoint de diagnostic : teste le GITHUB_KEY en appelant /user.
+async function handleDebugGithub(env) {
+  const key = env.GITHUB_KEY;
+  if (!key) {
+    return Response.json({ ok: false, error: 'GITHUB_KEY absent dans Cloudflare' });
+  }
+  const res = await fetch('https://api.github.com/user', {
+    headers: ghHeaders(env),
+  });
+  const body = await res.text();
+  return Response.json({
+    token_length: key.length,
+    token_prefix: key.slice(0, 4),
+    token_has_whitespace: /\s/.test(key),
+    github_status: res.status,
+    github_response: body.slice(0, 500),
+  });
+}
+
 // ----------------------------------------------------------------------------
 // Routeur.
 // ----------------------------------------------------------------------------
@@ -306,6 +325,9 @@ export default {
       }
       if (method === 'POST' && path === '/ingest/france-travail') {
         return withCors(await handleIngestFT(env));
+      }
+      if (method === 'GET' && path === '/debug/github') {
+        return withCors(await handleDebugGithub(env));
       }
       if (method === 'POST' && path === '/leads/mark-all-prospected') {
         return withCors(await handleMarkAllProspected(req, env));
