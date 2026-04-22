@@ -94,7 +94,7 @@ async function handleOffres(req, env) {
 // ----------------------------------------------------------------------------
 
 const GITHUB_REPO = 'Bapt252/leads';
-const LEADS_PATH = 'public/data/leads.json';
+const LEADS_PATH = 'data/leads.json';
 const ENRICH_WORKFLOW = 'enrich.yml';
 
 function ghHeaders(env) {

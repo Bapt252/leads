@@ -124,7 +124,7 @@ async function handleOffres(req: Request, env: Env): Promise<Response> {
 // Partie GitHub (nouveau).
 // ----------------------------------------------------------------------------
 
-const LEADS_PATH = 'public/data/leads.json';
+const LEADS_PATH = 'data/leads.json';
 const ENRICH_WORKFLOW = 'enrich.yml';
 
 type JobStatus = 'new' | 'prospected';

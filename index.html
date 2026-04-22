@@ -1,0 +1,656 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Leads — Tenex</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>💼</text></svg>" />
+  <!-- Tailwind CDN : zero build, parfait pour un single-file app -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
+    /* Scrollbar discrète */
+    ::-webkit-scrollbar { height: 6px; width: 6px; }
+    ::-webkit-scrollbar-thumb { background: #d4d4d8; border-radius: 3px; }
+  </style>
+</head>
+<body class="bg-gradient-to-b from-zinc-50 to-white min-h-screen text-zinc-900">
+
+<div id="app" class="min-h-screen">
+  <!-- Header -->
+  <header class="border-b border-zinc-200 bg-white/70 backdrop-blur-sm sticky top-0 z-10">
+    <div class="mx-auto max-w-7xl flex items-center justify-between px-6 py-5">
+      <div class="flex items-center gap-3">
+        <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-zinc-900 text-white">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2"/></svg>
+        </div>
+        <div>
+          <h1 class="text-xl font-semibold">Leads</h1>
+          <p class="text-xs text-zinc-500">Prospection B2B — Tenex</p>
+        </div>
+      </div>
+      <div class="flex items-center gap-2">
+        <button id="btn-refresh" class="inline-flex items-center gap-2 rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm font-medium text-zinc-700 shadow-sm transition hover:bg-zinc-50 hover:shadow">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/></svg>
+          Rafraîchir
+        </button>
+        <button id="btn-ingest" class="inline-flex items-center gap-2 rounded-lg bg-zinc-900 px-4 py-2 text-sm font-medium text-white shadow-sm transition hover:bg-zinc-700">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 14.9A7 7 0 1 1 15.7 8h1.8a4.5 4.5 0 0 1 2.3 8.3"/><path d="M12 12v9"/><path d="m8 17 4 4 4-4"/></svg>
+          Ingérer maintenant
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <main class="mx-auto max-w-7xl px-6 py-8">
+    <div id="toast-container"></div>
+    <div id="stats" class="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-3"></div>
+
+    <section class="rounded-2xl border border-zinc-200 bg-white shadow-sm">
+      <div class="flex flex-wrap items-center justify-between gap-4 border-b border-zinc-100 px-6 py-4">
+        <nav id="tabs" class="flex gap-1 rounded-lg bg-zinc-100 p-1 text-sm"></nav>
+        <div class="flex gap-2">
+          <button id="btn-mark-all" class="hidden inline-flex items-center gap-1.5 rounded-lg border border-zinc-300 bg-white px-3 py-1.5 text-sm text-zinc-700 transition hover:bg-zinc-50">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+            <span id="btn-mark-all-label">Tout marquer</span>
+          </button>
+          <button id="btn-export" class="inline-flex items-center gap-1.5 rounded-lg border border-zinc-300 bg-white px-3 py-1.5 text-sm text-zinc-700 transition hover:bg-zinc-50 disabled:opacity-50 disabled:cursor-not-allowed">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+            Export CSV
+          </button>
+        </div>
+      </div>
+      <div id="filters" class="border-b border-zinc-100 px-6 py-3 flex flex-wrap items-center gap-2 text-sm"></div>
+      <div id="table-container"></div>
+    </section>
+
+    <footer id="footer" class="mt-6 flex items-center justify-between text-xs text-zinc-400"></footer>
+  </main>
+</div>
+
+<!-- Modal Prospect (caché par défaut) -->
+<dialog id="prospect-dialog" class="rounded-2xl border border-zinc-200 p-0 shadow-2xl backdrop:bg-zinc-900/40 backdrop:backdrop-blur-sm">
+  <form id="prospect-form" class="flex w-[460px] flex-col p-0">
+    <div class="border-b border-zinc-100 px-6 py-5">
+      <h2 id="prospect-title" class="text-lg font-semibold"></h2>
+      <p id="prospect-subtitle" class="mt-0.5 text-sm text-zinc-500"></p>
+    </div>
+    <div class="flex flex-col gap-4 px-6 py-5">
+      <label class="flex flex-col gap-1.5">
+        <span class="text-xs font-medium text-zinc-600">Nom du contact</span>
+        <input name="contact_name" class="rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm placeholder:text-zinc-400 focus:border-zinc-400 focus:outline-none focus:ring-2 focus:ring-zinc-900/10" placeholder="Jeanne Dupont" />
+      </label>
+      <label class="flex flex-col gap-1.5">
+        <span class="text-xs font-medium text-zinc-600">Email</span>
+        <input name="contact_email" type="email" class="rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm placeholder:text-zinc-400 focus:border-zinc-400 focus:outline-none focus:ring-2 focus:ring-zinc-900/10" placeholder="jeanne.dupont@exemple.fr" />
+      </label>
+      <label class="flex flex-col gap-1.5">
+        <span class="text-xs font-medium text-zinc-600">Téléphone</span>
+        <input name="contact_phone" type="tel" class="rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm placeholder:text-zinc-400 focus:border-zinc-400 focus:outline-none focus:ring-2 focus:ring-zinc-900/10" placeholder="06 12 34 56 78" />
+      </label>
+      <label class="flex flex-col gap-1.5">
+        <span class="text-xs font-medium text-zinc-600">Notes</span>
+        <textarea name="notes" rows="3" class="rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm placeholder:text-zinc-400 focus:border-zinc-400 focus:outline-none focus:ring-2 focus:ring-zinc-900/10" placeholder="Historique des échanges, intérêt, blocages…"></textarea>
+      </label>
+    </div>
+    <div class="flex justify-end gap-2 border-t border-zinc-100 bg-zinc-50/50 px-6 py-4">
+      <button type="button" id="prospect-cancel" class="rounded-lg border border-zinc-200 bg-white px-4 py-2 text-sm font-medium text-zinc-700 transition hover:bg-zinc-50">Annuler</button>
+      <button type="submit" id="prospect-submit" class="rounded-lg bg-zinc-900 px-4 py-2 text-sm font-medium text-white shadow-sm transition hover:bg-zinc-700 disabled:opacity-50">Enregistrer</button>
+    </div>
+  </form>
+</dialog>
+
+<script type="module">
+// ============================================================================
+// Configuration
+// ============================================================================
+
+// URL publique du JSON (même repo, branche main).
+const LEADS_URL = 'data/leads.json';
+
+// URL du Worker Cloudflare (pas un secret, juste une URL).
+const WORKER_URL = 'https://leads-france-travail.baptiste-coma.workers.dev';
+
+// Clé de stockage localStorage pour l'API key du Worker.
+const API_KEY_STORAGE = 'leads.worker_api_key';
+
+// ============================================================================
+// État global
+// ============================================================================
+
+let store = null;           // { version, updated_at, jobs: [] }
+let currentFilters = {};    // { status, departement, sector, rome_label }
+
+// ============================================================================
+// Helpers réseau
+// ============================================================================
+
+function getApiKey() {
+  return localStorage.getItem(API_KEY_STORAGE);
+}
+
+function setApiKey(key) {
+  localStorage.setItem(API_KEY_STORAGE, key);
+}
+
+function clearApiKey() {
+  localStorage.removeItem(API_KEY_STORAGE);
+}
+
+function ensureApiKey() {
+  const existing = getApiKey();
+  if (existing) return existing;
+  const entered = window.prompt(
+    'Clé API du Worker Cloudflare (une seule fois, stockée localement) :',
+  );
+  if (!entered) return null;
+  const trimmed = entered.trim();
+  setApiKey(trimmed);
+  return trimmed;
+}
+
+async function loadStore() {
+  // ?t=<timestamp> pour contourner le cache navigateur après une écriture.
+  const res = await fetch(`${LEADS_URL}?t=${Date.now()}`, { cache: 'no-store' });
+  if (!res.ok) throw new Error(`GET leads.json a échoué : ${res.status}`);
+  return await res.json();
+}
+
+async function workerFetch(path, init = {}) {
+  const key = ensureApiKey();
+  if (!key) throw new Error('Clé API absente');
+  const res = await fetch(`${WORKER_URL}${path}`, {
+    ...init,
+    headers: {
+      ...(init.headers ?? {}),
+      'Content-Type': 'application/json',
+      'X-API-Key': key,
+    },
+  });
+  if (res.status === 401) {
+    clearApiKey();
+    throw new Error('Clé API refusée — retente pour la saisir à nouveau');
+  }
+  if (!res.ok) {
+    throw new Error(`Worker a répondu ${res.status} : ${await res.text()}`);
+  }
+  return res;
+}
+
+async function patchLead(id, patch) {
+  await workerFetch(`/leads/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(patch),
+  });
+}
+
+async function markAllProspectedIds(ids) {
+  if (ids.length === 0) return;
+  await workerFetch('/leads/mark-all-prospected', {
+    method: 'POST',
+    body: JSON.stringify({ ids }),
+  });
+}
+
+async function triggerIngest() {
+  await workerFetch('/ingest/france-travail', { method: 'POST' });
+}
+
+// ============================================================================
+// URL state
+// ============================================================================
+
+function readFiltersFromUrl() {
+  const p = new URLSearchParams(window.location.search);
+  const status = p.get('status');
+  return {
+    status: status === 'prospected' || status === 'all' ? status : 'new',
+    departement: p.get('departement') || undefined,
+    sector: p.get('sector') || undefined,
+    rome_label: p.get('rome_label') || undefined,
+  };
+}
+
+function writeFiltersToUrl(filters) {
+  const p = new URLSearchParams();
+  if (filters.status && filters.status !== 'new') p.set('status', filters.status);
+  if (filters.departement) p.set('departement', filters.departement);
+  if (filters.sector) p.set('sector', filters.sector);
+  if (filters.rome_label) p.set('rome_label', filters.rome_label);
+  const qs = p.toString();
+  const url = qs ? `?${qs}` : window.location.pathname;
+  window.history.pushState({}, '', url);
+}
+
+function updateFilter(key, value) {
+  currentFilters = { ...currentFilters, [key]: value || undefined };
+  writeFiltersToUrl(currentFilters);
+  render();
+}
+
+// ============================================================================
+// Données (filtre + stats)
+// ============================================================================
+
+function filterJobs(jobs, q) {
+  return jobs
+    .filter((j) => {
+      if (q.status !== 'all' && j.status !== q.status) return false;
+      if (q.departement && j.departement !== q.departement) return false;
+      if (q.sector && j.sector !== q.sector) return false;
+      if (q.rome_label && j.rome_label !== q.rome_label) return false;
+      return true;
+    })
+    .sort((a, b) => {
+      const ka = a.posted_at ?? a.created_at;
+      const kb = b.posted_at ?? b.created_at;
+      return kb.localeCompare(ka);
+    });
+}
+
+function distinctValues(jobs, column) {
+  const set = new Set();
+  for (const j of jobs) {
+    const v = j[column];
+    if (v) set.add(v);
+  }
+  return Array.from(set).sort();
+}
+
+// ============================================================================
+// CSV export
+// ============================================================================
+
+const CSV_HEADERS = [
+  'id','source','source_url','company_name','job_title','location',
+  'departement','sector','rome_label','posted_at','status','prospected_at',
+  'contact_name','contact_email','contact_phone','notes','created_at',
+];
+
+function escapeCell(v) {
+  if (v === null || v === undefined) return '';
+  const s = String(v);
+  if (/[",\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+  return s;
+}
+
+function jobsToCsv(jobs) {
+  const lines = [CSV_HEADERS.join(',')];
+  for (const j of jobs) {
+    lines.push(CSV_HEADERS.map((h) => escapeCell(j[h])).join(','));
+  }
+  return lines.join('\n');
+}
+
+function downloadCsv() {
+  const jobs = filterJobs(store.jobs, currentFilters);
+  const csv = jobsToCsv(jobs);
+  const today = new Date().toISOString().slice(0, 10);
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `leads-${currentFilters.status}-${today}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+// ============================================================================
+// Rendu DOM (helpers pour éviter XSS)
+// ============================================================================
+
+function el(tag, props = {}, ...children) {
+  const node = document.createElement(tag);
+  for (const [k, v] of Object.entries(props)) {
+    if (k === 'class') node.className = v;
+    else if (k === 'html') node.innerHTML = v;
+    else if (k.startsWith('on')) node.addEventListener(k.slice(2).toLowerCase(), v);
+    else if (v !== null && v !== undefined && v !== false) node.setAttribute(k, v);
+  }
+  for (const c of children.flat()) {
+    if (c === null || c === undefined || c === false) continue;
+    node.appendChild(typeof c === 'string' || typeof c === 'number' ? document.createTextNode(String(c)) : c);
+  }
+  return node;
+}
+
+function formatDate(iso) {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: 'numeric' });
+}
+
+// ============================================================================
+// Toast
+// ============================================================================
+
+function showToast(msg, kind = 'info') {
+  const container = document.getElementById('toast-container');
+  container.innerHTML = '';
+  const style = kind === 'error'
+    ? 'border-red-200 bg-red-50 text-red-800'
+    : 'border-blue-200 bg-blue-50 text-blue-800';
+  const toast = el('div', { class: `mb-6 flex items-start justify-between gap-3 rounded-lg border px-4 py-3 text-sm ${style}` },
+    el('span', {}, msg),
+    el('button', {
+      type: 'button',
+      class: 'shrink-0 rounded-md px-2 py-0.5 text-xs font-medium opacity-70 transition hover:opacity-100',
+      onClick: () => (container.innerHTML = ''),
+    }, 'Fermer'),
+  );
+  container.appendChild(toast);
+}
+
+// ============================================================================
+// Modal prospect
+// ============================================================================
+
+function openProspectDialog(job) {
+  const dialog = document.getElementById('prospect-dialog');
+  const form = document.getElementById('prospect-form');
+  document.getElementById('prospect-title').textContent =
+    job.status === 'prospected' ? 'Mettre à jour le contact' : 'Marquer prospecté';
+  document.getElementById('prospect-subtitle').textContent = `${job.company_name} · ${job.job_title}`;
+  form.contact_name.value = job.contact_name ?? '';
+  form.contact_email.value = job.contact_email ?? '';
+  form.contact_phone.value = job.contact_phone ?? '';
+  form.notes.value = job.notes ?? '';
+  form.dataset.jobId = job.id;
+  dialog.showModal();
+}
+
+function emptyToNull(v) {
+  if (typeof v !== 'string') return null;
+  const t = v.trim();
+  return t === '' ? null : t;
+}
+
+document.getElementById('prospect-cancel').addEventListener('click', () => {
+  document.getElementById('prospect-dialog').close();
+});
+
+document.getElementById('prospect-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const form = e.currentTarget;
+  const submit = document.getElementById('prospect-submit');
+  if (submit.disabled) return;
+  submit.disabled = true;
+  submit.textContent = 'Enregistrement…';
+  try {
+    const id = form.dataset.jobId;
+    await patchLead(id, {
+      status: 'prospected',
+      contact_name: emptyToNull(form.contact_name.value),
+      contact_email: emptyToNull(form.contact_email.value),
+      contact_phone: emptyToNull(form.contact_phone.value),
+      notes: emptyToNull(form.notes.value),
+    });
+    document.getElementById('prospect-dialog').close();
+    await reload();
+  } catch (err) {
+    window.alert(`Échec : ${err.message ?? err}`);
+  } finally {
+    submit.disabled = false;
+    submit.textContent = 'Enregistrer';
+  }
+});
+
+// ============================================================================
+// Rendus partiels
+// ============================================================================
+
+function renderStats() {
+  const container = document.getElementById('stats');
+  container.innerHTML = '';
+  const total = store.jobs.length;
+  const news = store.jobs.filter((j) => j.status === 'new').length;
+  const prosp = store.jobs.filter((j) => j.status === 'prospected').length;
+
+  function card(label, value, accent) {
+    const badge = { zinc: 'bg-zinc-900 text-white', blue: 'bg-blue-50 text-blue-700 ring-1 ring-blue-100', green: 'bg-emerald-50 text-emerald-700 ring-1 ring-emerald-100' }[accent];
+    const tag = { zinc: 'total', blue: 'actif', green: 'traité' }[accent];
+    return el('div', { class: 'rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm' },
+      el('p', { class: 'text-xs font-medium uppercase tracking-wider text-zinc-500' }, label),
+      el('div', { class: 'mt-2 flex items-baseline gap-3' },
+        el('span', { class: 'text-3xl font-semibold' }, value),
+        el('span', { class: `rounded-full px-2 py-0.5 text-xs font-medium ${badge}` }, tag),
+      ),
+    );
+  }
+  container.appendChild(card('Total offres', total, 'zinc'));
+  container.appendChild(card('À prospecter', news, 'blue'));
+  container.appendChild(card('Prospectés', prosp, 'green'));
+}
+
+function renderTabs() {
+  const nav = document.getElementById('tabs');
+  nav.innerHTML = '';
+  const tabs = [
+    { label: 'À prospecter', value: 'new' },
+    { label: 'Prospectés', value: 'prospected' },
+    { label: 'Toutes', value: 'all' },
+  ];
+  for (const t of tabs) {
+    const active = currentFilters.status === t.value;
+    const btn = el('button', {
+      type: 'button',
+      class: active
+        ? 'rounded-md bg-white px-3 py-1.5 font-medium text-zinc-900 shadow-sm'
+        : 'rounded-md px-3 py-1.5 text-zinc-600 transition hover:text-zinc-900',
+      onClick: () => updateFilter('status', t.value),
+    }, t.label);
+    nav.appendChild(btn);
+  }
+}
+
+function renderFilters() {
+  const container = document.getElementById('filters');
+  container.innerHTML = '';
+  const departements = distinctValues(store.jobs, 'departement');
+  const sectors = distinctValues(store.jobs, 'sector');
+  const romeLabels = distinctValues(store.jobs, 'rome_label');
+
+  function select(label, options, key) {
+    const value = currentFilters[key] ?? '';
+    const hasValue = value !== '';
+    const sel = el('select', {
+      'aria-label': label,
+      class: `rounded-lg border px-3 py-1.5 text-sm transition focus:outline-none focus:ring-2 focus:ring-zinc-900/10 ${hasValue ? 'border-zinc-900 bg-zinc-900 text-white' : 'border-zinc-200 bg-white text-zinc-700 hover:border-zinc-300'}`,
+      onChange: (e) => updateFilter(key, e.target.value),
+    });
+    sel.appendChild(el('option', { value: '' }, `Tous — ${label}`));
+    for (const opt of options) {
+      const o = el('option', { value: opt, class: 'bg-white text-zinc-700' }, opt);
+      if (opt === value) o.selected = true;
+      sel.appendChild(o);
+    }
+    return sel;
+  }
+
+  container.appendChild(select('Département', departements, 'departement'));
+  container.appendChild(select('Secteur', sectors, 'sector'));
+  container.appendChild(select('Métier', romeLabels, 'rome_label'));
+
+  const hasAny = currentFilters.departement || currentFilters.sector || currentFilters.rome_label;
+  if (hasAny) {
+    container.appendChild(el('button', {
+      type: 'button',
+      class: 'ml-1 text-xs font-medium text-zinc-500 underline-offset-2 transition hover:text-zinc-900 hover:underline',
+      onClick: () => {
+        currentFilters = { status: currentFilters.status };
+        writeFiltersToUrl(currentFilters);
+        render();
+      },
+    }, 'Effacer'));
+  }
+}
+
+function renderTable() {
+  const container = document.getElementById('table-container');
+  container.innerHTML = '';
+  const jobs = filterJobs(store.jobs, currentFilters);
+
+  if (jobs.length === 0) {
+    container.appendChild(el('div', { class: 'flex flex-col items-center justify-center gap-3 px-6 py-16 text-center' },
+      el('div', { class: 'flex h-16 w-16 items-center justify-center rounded-full bg-zinc-100 text-zinc-400', html: '<svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>' }),
+      el('p', { class: 'text-sm font-medium text-zinc-700' }, 'Aucune offre à afficher'),
+      el('p', { class: 'max-w-sm text-sm text-zinc-500' }, 'Lance une ingestion ou ajuste les filtres pour voir apparaître des offres ici.'),
+    ));
+    return;
+  }
+
+  const wrapper = el('div', { class: 'overflow-x-auto' });
+  const table = el('table', { class: 'min-w-full text-sm' });
+  const thead = el('thead', {}, el('tr', { class: 'border-b border-zinc-100 bg-zinc-50/50 text-left text-xs uppercase tracking-wider text-zinc-500' },
+    ...['Date','Source','Entreprise · Poste','Dép.','Métier','Statut','Contact',''].map((h) => el('th', { class: 'px-3 py-3 font-medium first:pl-6 last:pr-6' }, h))
+  ));
+  const tbody = el('tbody', {});
+
+  for (const job of jobs) {
+    const tr = el('tr', { class: 'border-b border-zinc-50 transition hover:bg-zinc-50/50' });
+
+    tr.appendChild(el('td', { class: 'whitespace-nowrap px-6 py-3 text-zinc-600' }, formatDate(job.posted_at)));
+    tr.appendChild(el('td', { class: 'px-3 py-3' },
+      el('span', { class: 'inline-flex rounded-md bg-zinc-100 px-2 py-0.5 text-xs font-medium text-zinc-700' }, 'France Travail'),
+    ));
+    const jobCell = el('td', { class: 'px-3 py-3' },
+      el('div', { class: 'flex flex-col' },
+        el('span', { class: 'font-medium text-zinc-900' }, job.company_name),
+        el('span', { class: 'text-xs text-zinc-500' }, job.job_title),
+      ),
+    );
+    if (job.source_url) {
+      jobCell.firstChild.appendChild(el('a', {
+        href: job.source_url, target: '_blank', rel: 'noopener noreferrer',
+        class: 'mt-0.5 inline-flex items-center gap-1 text-xs text-blue-600 hover:underline',
+        html: 'Voir l\'offre <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>',
+      }));
+    }
+    tr.appendChild(jobCell);
+    tr.appendChild(el('td', { class: 'whitespace-nowrap px-3 py-3 text-zinc-600' }, job.departement ?? '—'));
+    tr.appendChild(el('td', { class: 'px-3 py-3 text-zinc-600' },
+      el('div', { class: 'flex flex-col' },
+        el('span', {}, job.rome_label ?? '—'),
+        job.sector ? el('span', { class: 'text-xs text-zinc-400' }, job.sector) : null,
+      ),
+    ));
+
+    const statusBadge = job.status === 'new'
+      ? el('span', { class: 'inline-flex items-center gap-1 rounded-full bg-blue-50 px-2 py-0.5 text-xs font-medium text-blue-700 ring-1 ring-inset ring-blue-100' },
+          el('span', { class: 'h-1.5 w-1.5 rounded-full bg-blue-500' }),
+          'À prospecter',
+        )
+      : el('span', { class: 'inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700 ring-1 ring-inset ring-emerald-100' },
+          el('span', { class: 'h-1.5 w-1.5 rounded-full bg-emerald-500' }),
+          'Prospecté',
+        );
+    tr.appendChild(el('td', { class: 'px-3 py-3' }, statusBadge));
+
+    const contactParts = [job.contact_name, job.contact_email, job.contact_phone].filter(Boolean);
+    tr.appendChild(el('td', { class: 'px-3 py-3 text-xs text-zinc-600' },
+      contactParts.length ? el('span', { class: 'whitespace-pre-line' }, contactParts.join('\n')) : el('span', { class: 'text-zinc-300' }, '—'),
+    ));
+
+    const actionBtn = el('button', {
+      type: 'button',
+      class: job.status === 'prospected'
+        ? 'inline-flex items-center rounded-lg border border-zinc-200 bg-white px-3 py-1.5 text-xs font-medium text-zinc-700 shadow-sm transition hover:bg-zinc-50'
+        : 'inline-flex items-center rounded-lg bg-zinc-900 px-3 py-1.5 text-xs font-medium text-white shadow-sm transition hover:bg-zinc-700',
+      onClick: () => openProspectDialog(job),
+    }, job.status === 'prospected' ? 'Éditer' : 'Prospecter');
+    tr.appendChild(el('td', { class: 'px-3 py-3 pr-6 text-right' }, actionBtn));
+
+    tbody.appendChild(tr);
+  }
+
+  table.appendChild(thead);
+  table.appendChild(tbody);
+  wrapper.appendChild(table);
+  container.appendChild(wrapper);
+}
+
+function renderActions() {
+  const jobs = filterJobs(store.jobs, currentFilters);
+  const newInView = currentFilters.status === 'prospected' ? 0 : jobs.filter((j) => j.status === 'new').length;
+  const markBtn = document.getElementById('btn-mark-all');
+  if (newInView > 0) {
+    markBtn.classList.remove('hidden');
+    document.getElementById('btn-mark-all-label').textContent = `Tout marquer (${newInView})`;
+  } else {
+    markBtn.classList.add('hidden');
+  }
+  document.getElementById('btn-export').disabled = jobs.length === 0;
+}
+
+function renderFooter() {
+  const f = document.getElementById('footer');
+  f.innerHTML = '';
+  f.appendChild(el('span', {}, `Dernière màj : ${new Date(store.updated_at).toLocaleString('fr-FR')}`));
+  f.appendChild(el('span', {}, `${store.jobs.length} offre(s) au total`));
+}
+
+function render() {
+  if (!store) return;
+  renderStats();
+  renderTabs();
+  renderFilters();
+  renderTable();
+  renderActions();
+  renderFooter();
+}
+
+// ============================================================================
+// Actions
+// ============================================================================
+
+async function reload() {
+  try {
+    store = await loadStore();
+    render();
+  } catch (err) {
+    document.getElementById('app').innerHTML = `<div class="flex min-h-screen items-center justify-center p-6"><div class="w-full max-w-md rounded-2xl border border-red-200 bg-red-50 p-6 text-center"><p class="text-lg font-semibold text-red-800">Impossible de charger les leads</p><p class="mt-2 text-sm text-red-700">${err.message ?? err}</p></div></div>`;
+  }
+}
+
+document.getElementById('btn-refresh').addEventListener('click', () => void reload());
+
+document.getElementById('btn-ingest').addEventListener('click', async () => {
+  try {
+    await triggerIngest();
+    showToast('Ingestion lancée. Le workflow prend ~1-2 min — rafraîchis dans un instant.', 'info');
+  } catch (err) {
+    showToast(err.message ?? String(err), 'error');
+  }
+});
+
+document.getElementById('btn-mark-all').addEventListener('click', async () => {
+  const jobs = filterJobs(store.jobs, currentFilters);
+  const ids = jobs.filter((j) => j.status === 'new').map((j) => j.id);
+  if (ids.length === 0) return;
+  try {
+    await markAllProspectedIds(ids);
+    showToast(`${ids.length} offre(s) basculée(s) en prospected.`, 'info');
+    await reload();
+  } catch (err) {
+    showToast(err.message ?? String(err), 'error');
+  }
+});
+
+document.getElementById('btn-export').addEventListener('click', downloadCsv);
+
+// Navigation browser (bouton retour/avant).
+window.addEventListener('popstate', () => {
+  currentFilters = readFiltersFromUrl();
+  render();
+});
+
+// ============================================================================
+// Bootstrap
+// ============================================================================
+
+currentFilters = readFiltersFromUrl();
+reload();
+</script>
+</body>
+</html>

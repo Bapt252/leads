@@ -49,7 +49,7 @@ export interface LeadPatch {
 // Le cache CDN de raw.githubusercontent.com est ~5 min : les écritures
 // apparaissent avec ce délai côté front. Acceptable pour usage perso.
 const LEADS_URL =
-  'https://raw.githubusercontent.com/Bapt252/leads/main/public/data/leads.json';
+  'https://raw.githubusercontent.com/Bapt252/leads/main/data/leads.json';
 
 // URL du Worker Cloudflare exposée au bundle (non sensible).
 const WORKER_URL =

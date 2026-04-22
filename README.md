@@ -10,13 +10,13 @@ les afficher dans une liste unique, permettre de marquer chaque offre comme
 
 ## Architecture
 
-Site 100% statique (GitHub Pages) avec persistance via commits dans le repo :
+Single-page app HTML servie directement par GitHub Pages, zéro build :
 
 ```
-┌─ GitHub Pages (bapt252.github.io/leads) ─ site static Next.js
+┌─ GitHub Pages (bapt252.github.io/leads) ─ index.html à la racine du repo
 │     │
 │     ↓ fetch (lecture publique, sans auth)
-│  public/data/leads.json  ← source unique dans le repo
+│  data/leads.json  ← source unique dans le repo
 │     ↑ écrit                     ↑ écrit
 │  Cloudflare Worker           GitHub Actions (cron journalier)
 │  (PATCH user fields           (enrich.ts : appel API France Travail
@@ -24,12 +24,14 @@ Site 100% statique (GitHub Pages) avec persistance via commits dans le repo :
 └───────────────────────────────────────────────────────────────────
 ```
 
+Le dossier `src/` contient une version Next.js alternative (conservée pour
+dev local éventuel), mais la source qui tourne en production est `index.html`.
+
 ## Stack
 
-- Next.js 16 (App Router, export static) + React 19 + TypeScript strict
-- Tailwind CSS v4
+- `index.html` : vanilla JS + Tailwind CDN, un seul fichier
 - Cloudflare Worker (proxy API France Travail + proxy écriture GitHub)
-- GitHub Actions (cron enrichissement + déploiement Pages)
+- GitHub Actions (cron enrichissement journalier)
 
 ## Prérequis
 
@@ -59,19 +61,17 @@ Worker (stockée dans localStorage).
 
 ## Déploiement
 
-Tout est automatisé via GitHub Actions :
-
-| Workflow | Déclencheur | Action |
-|---|---|---|
-| `enrich.yml` | Cron 6h UTC + bouton UI | Appelle l'API FT, merge delta, commit `leads.json` |
-| `deploy.yml` | Push sur `main` | Build static + publie sur GitHub Pages |
+1. **GitHub Pages** : Settings → Pages → Source = **Deploy from a branch** →
+   `main` / `/` (root). Le fichier `index.html` à la racine est servi directement.
+2. **Workflow `enrich.yml`** : tourne en cron 6h UTC + manuellement. Appelle
+   l'API France Travail (via le Worker), merge delta, commit `data/leads.json`.
+   Chaque commit déclenche un redéploiement auto de GitHub Pages.
 
 ### Secrets GitHub Actions à configurer
 
-Settings → Secrets and variables → Actions :
-- `FRANCE_TRAVAIL_WORKER_URL` (secret)
-- `FRANCE_TRAVAIL_WORKER_KEY` (secret — vs `SHARED_API_KEY` du Worker)
-- `NEXT_PUBLIC_WORKER_URL` (variable, pas secret — exposée au bundle)
+Settings → Secrets and variables → Actions → onglet **Secrets** :
+- `FRANCE_TRAVAIL_WORKER_URL`
+- `FRANCE_TRAVAIL_WORKER_KEY` (= `SHARED_API_KEY` du Worker)
 
 ### Secrets Cloudflare Worker à configurer
 

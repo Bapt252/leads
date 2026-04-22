@@ -7,7 +7,7 @@
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
-const LEADS_PATH = 'public/data/leads.json';
+const LEADS_PATH = 'data/leads.json';
 
 export type JobSource = 'france_travail';
 export type JobStatus = 'new' | 'prospected';
