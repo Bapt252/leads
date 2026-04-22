@@ -22,7 +22,6 @@ interface Props {
   onUpdated: () => Promise<void>;
 }
 
-// Normalise une chaîne trim'ée : '' → null.
 function emptyToNull(value: FormDataEntryValue | null): string | null {
   if (typeof value !== 'string') return null;
   const trimmed = value.trim();
@@ -36,8 +35,8 @@ export function ProspectButton({ job, onUpdated }: Props) {
   const isProspected = job.status === 'prospected';
   const buttonLabel = isProspected ? 'Éditer' : 'Prospecter';
   const buttonClass = isProspected
-    ? 'rounded-md border border-zinc-300 px-2 py-1 text-xs text-zinc-700 transition hover:bg-zinc-50'
-    : 'rounded-md bg-zinc-900 px-2 py-1 text-xs text-white transition hover:bg-zinc-700';
+    ? 'inline-flex items-center rounded-lg border border-zinc-200 bg-white px-3 py-1.5 text-xs font-medium text-zinc-700 shadow-sm transition hover:bg-zinc-50'
+    : 'inline-flex items-center rounded-lg bg-zinc-900 px-3 py-1.5 text-xs font-medium text-white shadow-sm transition hover:bg-zinc-700';
 
   async function handleSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -55,7 +54,6 @@ export function ProspectButton({ job, onUpdated }: Props) {
       dialogRef.current?.close();
       await onUpdated();
     } catch (err) {
-      // Affichage simple dans la modal via alert — l'UI reste minimale.
       window.alert(
         `Échec : ${err instanceof Error ? err.message : String(err)}`,
       );
@@ -76,66 +74,66 @@ export function ProspectButton({ job, onUpdated }: Props) {
 
       <dialog
         ref={dialogRef}
-        className="rounded-lg border border-zinc-200 p-0 shadow-xl backdrop:bg-black/40"
+        className="rounded-2xl border border-zinc-200 p-0 shadow-2xl backdrop:bg-zinc-900/40 backdrop:backdrop-blur-sm"
       >
-        <form
-          onSubmit={handleSubmit}
-          className="flex w-[420px] flex-col gap-3 p-6"
-        >
-          <div>
-            <h2 className="text-lg font-semibold">
-              {isProspected ? 'Mettre à jour' : 'Marquer prospecté'}
+        <form onSubmit={handleSubmit} className="flex w-[460px] flex-col p-0">
+          <div className="border-b border-zinc-100 px-6 py-5">
+            <h2 className="text-lg font-semibold text-zinc-900">
+              {isProspected ? 'Mettre à jour le contact' : 'Marquer prospecté'}
             </h2>
-            <p className="text-xs text-zinc-500">
-              {job.company_name} — {job.job_title}
+            <p className="mt-0.5 text-sm text-zinc-500">
+              {job.company_name}{' '}
+              <span className="text-zinc-400">·</span> {job.job_title}
             </p>
           </div>
 
-          <Field
-            label="Nom du contact"
-            name="contact_name"
-            defaultValue={job.contact_name ?? ''}
-            placeholder="Jeanne Dupont"
-          />
-          <Field
-            label="Email"
-            name="contact_email"
-            type="email"
-            defaultValue={job.contact_email ?? ''}
-            placeholder="jeanne.dupont@exemple.fr"
-          />
-          <Field
-            label="Téléphone"
-            name="contact_phone"
-            type="tel"
-            defaultValue={job.contact_phone ?? ''}
-            placeholder="06 12 34 56 78"
-          />
-
-          <label className="flex flex-col gap-1">
-            <span className="text-sm text-zinc-700">Notes</span>
-            <textarea
-              name="notes"
-              defaultValue={job.notes ?? ''}
-              rows={3}
-              className="rounded border border-zinc-300 px-2 py-1.5 text-sm"
-              placeholder="Historique des échanges, intérêt, blocages…"
+          <div className="flex flex-col gap-4 px-6 py-5">
+            <Field
+              label="Nom du contact"
+              name="contact_name"
+              defaultValue={job.contact_name ?? ''}
+              placeholder="Jeanne Dupont"
             />
-          </label>
+            <Field
+              label="Email"
+              name="contact_email"
+              type="email"
+              defaultValue={job.contact_email ?? ''}
+              placeholder="jeanne.dupont@exemple.fr"
+            />
+            <Field
+              label="Téléphone"
+              name="contact_phone"
+              type="tel"
+              defaultValue={job.contact_phone ?? ''}
+              placeholder="06 12 34 56 78"
+            />
 
-          <div className="mt-2 flex justify-end gap-2">
+            <label className="flex flex-col gap-1.5">
+              <span className="text-xs font-medium text-zinc-600">Notes</span>
+              <textarea
+                name="notes"
+                defaultValue={job.notes ?? ''}
+                rows={3}
+                className="rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm placeholder:text-zinc-400 focus:border-zinc-400 focus:outline-none focus:ring-2 focus:ring-zinc-900/10"
+                placeholder="Historique des échanges, intérêt, blocages…"
+              />
+            </label>
+          </div>
+
+          <div className="flex justify-end gap-2 border-t border-zinc-100 bg-zinc-50/50 px-6 py-4">
             <button
               type="button"
               onClick={() => dialogRef.current?.close()}
-              className="rounded-md border border-zinc-300 px-3 py-1.5 text-sm text-zinc-700 transition hover:bg-zinc-50"
               disabled={saving}
+              className="rounded-lg border border-zinc-200 bg-white px-4 py-2 text-sm font-medium text-zinc-700 transition hover:bg-zinc-50 disabled:opacity-50"
             >
               Annuler
             </button>
             <button
               type="submit"
               disabled={saving}
-              className="rounded-md bg-zinc-900 px-3 py-1.5 text-sm font-medium text-white transition hover:bg-zinc-700 disabled:opacity-50"
+              className="rounded-lg bg-zinc-900 px-4 py-2 text-sm font-medium text-white shadow-sm transition hover:bg-zinc-700 disabled:opacity-50"
             >
               {saving ? 'Enregistrement…' : 'Enregistrer'}
             </button>
@@ -160,14 +158,14 @@ function Field({
   placeholder?: string;
 }) {
   return (
-    <label className="flex flex-col gap-1">
-      <span className="text-sm text-zinc-700">{label}</span>
+    <label className="flex flex-col gap-1.5">
+      <span className="text-xs font-medium text-zinc-600">{label}</span>
       <input
         name={name}
         type={type}
         defaultValue={defaultValue}
         placeholder={placeholder}
-        className="rounded border border-zinc-300 px-2 py-1.5 text-sm"
+        className="rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm placeholder:text-zinc-400 focus:border-zinc-400 focus:outline-none focus:ring-2 focus:ring-zinc-900/10"
       />
     </label>
   );

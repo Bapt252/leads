@@ -3,7 +3,8 @@
 import { useRouter, useSearchParams, usePathname } from 'next/navigation';
 
 // Barre de 3 selects + bouton "Effacer" qui écrit dans l'URL.
-// Client Component pour que le changement d'un select déclenche directement la navigation.
+// Client Component pour que le changement d'un select déclenche directement
+// la navigation.
 
 interface FiltersBarProps {
   departements: string[];
@@ -49,7 +50,7 @@ export function FiltersBar({
   }
 
   return (
-    <div className="mb-4 flex flex-wrap items-center gap-2 text-sm">
+    <div className="flex flex-wrap items-center gap-2 text-sm">
       <FilterSelect
         label="Département"
         value={current.departement ?? ''}
@@ -72,9 +73,9 @@ export function FiltersBar({
         <button
           type="button"
           onClick={clearAll}
-          className="text-zinc-500 underline hover:text-zinc-900"
+          className="ml-1 text-xs font-medium text-zinc-500 underline-offset-2 transition hover:text-zinc-900 hover:underline"
         >
-          Effacer les filtres
+          Effacer
         </button>
       )}
     </div>
@@ -92,16 +93,21 @@ function FilterSelect({
   options: string[];
   onChange: (v: string) => void;
 }) {
+  const hasValue = value !== '';
   return (
     <select
       value={value}
       onChange={(e) => onChange(e.target.value)}
-      className="rounded-md border border-zinc-300 bg-white px-2 py-1.5 text-sm"
+      className={`rounded-lg border px-3 py-1.5 text-sm transition focus:outline-none focus:ring-2 focus:ring-zinc-900/10 ${
+        hasValue
+          ? 'border-zinc-900 bg-zinc-900 text-white'
+          : 'border-zinc-200 bg-white text-zinc-700 hover:border-zinc-300'
+      }`}
       aria-label={label}
     >
       <option value="">Tous — {label}</option>
       {options.map((opt) => (
-        <option key={opt} value={opt}>
+        <option key={opt} value={opt} className="bg-white text-zinc-700">
           {opt}
         </option>
       ))}
