@@ -1,3 +1,4 @@
+// @ts-nocheck
 // ============================================================================
 // Version JS sans types — à copier-coller dans l'éditeur Cloudflare Workers.
 // Source de vérité TypeScript : worker/src/index.ts
