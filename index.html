@@ -111,7 +111,14 @@ const LEADS_URL = 'data/leads.json';
 // URL du Worker Cloudflare (pas un secret, juste une URL).
 const WORKER_URL = 'https://leads-france-travail.baptiste-coma.workers.dev';
 
-// Clé de stockage localStorage pour l'API key du Worker.
+// Clé API du Worker — option automatique, VISIBLE PUBLIQUEMENT dans le source.
+// Si tu colles ta SHARED_API_KEY ici, plus aucun prompt ne sera affiché ;
+// en contrepartie, n'importe qui qui lit le source peut appeler ton Worker.
+// Accepté pour un outil perso à faible trafic. Laisse '' pour exiger un prompt
+// unique stocké dans localStorage (plus sûr).
+const HARDCODED_API_KEY = '';
+
+// Clé de stockage localStorage pour l'API key du Worker (fallback si pas hardcodée).
 const API_KEY_STORAGE = 'leads.worker_api_key';
 
 // ============================================================================
@@ -126,6 +133,8 @@ let currentFilters = {};    // { status, departement, sector, rome_label }
 // ============================================================================
 
 function getApiKey() {
+  // Priorité à la clé hardcodée, fallback sur localStorage.
+  if (HARDCODED_API_KEY) return HARDCODED_API_KEY;
   return localStorage.getItem(API_KEY_STORAGE);
 }
 
