@@ -45,6 +45,7 @@
   <main class="mx-auto max-w-7xl px-6 py-8">
     <div id="toast-container"></div>
     <div id="stats" class="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-3"></div>
+    <div id="today-banner"></div>
 
     <section class="rounded-2xl border border-zinc-200 bg-white shadow-sm">
       <div class="flex flex-wrap items-center justify-between gap-4 border-b border-zinc-100 px-6 py-4">
@@ -149,6 +150,22 @@ let focusedJobId = null;
 // pour que j/k naviguent correctement après un filtre/tri.
 let visibleJobsCache = [];
 
+// Contact en cours d'édition dans le panneau d'un compte. `contactId` à null
+// signifie "ajout d'un nouveau contact". null = pas de formulaire ouvert.
+let editingContact = null; // { accountId, contactId } | null
+
+// Étapes du pipeline + couleurs Tailwind. Ordre = ordre d'affichage des chips.
+const STAGE_ORDER = ['nouveau', 'contacte', 'relance', 'rdv', 'qualifie', 'gagne', 'perdu'];
+const STAGE_CONFIG = {
+  nouveau:   { label: 'Nouveau',   cls: 'bg-zinc-100 text-zinc-700 ring-zinc-200',       dot: 'bg-zinc-400' },
+  contacte:  { label: 'Contacté',  cls: 'bg-blue-50 text-blue-700 ring-blue-200',         dot: 'bg-blue-500' },
+  relance:   { label: 'Relancé',   cls: 'bg-amber-50 text-amber-700 ring-amber-200',      dot: 'bg-amber-500' },
+  rdv:       { label: 'RDV',       cls: 'bg-violet-50 text-violet-700 ring-violet-200',   dot: 'bg-violet-500' },
+  qualifie:  { label: 'Qualifié',  cls: 'bg-indigo-50 text-indigo-700 ring-indigo-200',   dot: 'bg-indigo-500' },
+  gagne:     { label: 'Gagné',     cls: 'bg-emerald-50 text-emerald-700 ring-emerald-200', dot: 'bg-emerald-500' },
+  perdu:     { label: 'Perdu',     cls: 'bg-red-50 text-red-700 ring-red-200',             dot: 'bg-red-500' },
+};
+
 // ============================================================================
 // Helpers réseau
 // ============================================================================
@@ -233,6 +250,42 @@ async function markAllProspectedIds(ids) {
     method: 'POST',
     body: JSON.stringify({ ids }),
   });
+  const data = await res.json();
+  return data.store;
+}
+
+async function patchAccount(accountId, patch) {
+  const res = await workerFetch(`/accounts/${encodeURIComponent(accountId)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(patch),
+  });
+  const data = await res.json();
+  return data.store;
+}
+
+async function addContact(accountId, contact) {
+  const res = await workerFetch(`/accounts/${encodeURIComponent(accountId)}/contacts`, {
+    method: 'POST',
+    body: JSON.stringify(contact),
+  });
+  const data = await res.json();
+  return data.store;
+}
+
+async function updateContact(accountId, contactId, patch) {
+  const res = await workerFetch(
+    `/accounts/${encodeURIComponent(accountId)}/contacts/${encodeURIComponent(contactId)}`,
+    { method: 'PATCH', body: JSON.stringify(patch) },
+  );
+  const data = await res.json();
+  return data.store;
+}
+
+async function deleteContact(accountId, contactId) {
+  const res = await workerFetch(
+    `/accounts/${encodeURIComponent(accountId)}/contacts/${encodeURIComponent(contactId)}`,
+    { method: 'DELETE' },
+  );
   const data = await res.json();
   return data.store;
 }
@@ -813,16 +866,21 @@ function buildAccountGroupRow(account, jobs) {
     .filter(Boolean)
     .sort()
     .pop();
-  const contactSet = new Set();
-  for (const j of jobs) {
-    [j.contact_name, j.contact_email, j.contact_phone]
-      .filter(Boolean)
-      .forEach((c) => contactSet.add(c));
-  }
   const isUnknownCompany = account.company_name === 'Non communiqué';
+  const stageCfg = STAGE_CONFIG[account.stage] ?? STAGE_CONFIG.nouveau;
+  const contactsCount = account.contacts?.length ?? 0;
+
+  // Indicateur "à traiter aujourd'hui"
+  const today = new Date().toISOString().slice(0, 10);
+  const isDue = account.next_action_at
+    && account.next_action_at.slice(0, 10) <= today
+    && account.stage !== 'gagne'
+    && account.stage !== 'perdu';
 
   const tr = el('tr', {
-    class: 'border-b border-zinc-100 bg-white transition hover:bg-zinc-50 cursor-pointer',
+    class: `border-b border-zinc-100 transition cursor-pointer ${
+      isDue ? 'bg-amber-50/50 hover:bg-amber-50' : 'bg-white hover:bg-zinc-50'
+    }`,
   });
   tr.addEventListener('click', (e) => {
     if (e.target.closest('button, a, input')) return;
@@ -831,61 +889,472 @@ function buildAccountGroupRow(account, jobs) {
     render();
   });
 
-  // Toggle (utilise la cellule "Date")
+  // Toggle (cellule "Date")
   tr.appendChild(el('td', { class: 'px-6 py-4 text-zinc-400' },
     el('span', { class: 'inline-block w-3 text-sm' }, expanded ? '▼' : '▶'),
   ));
 
-  // Source (vide ici, on n'affiche que la badge dans la colonne 6)
+  // Source (vide)
   tr.appendChild(el('td', { class: 'px-3 py-4' }));
 
-  // Entreprise + count (colspan 3 : remplit Entreprise + Dép. + Métier)
+  // Entreprise + métadonnées (colspan 3 : Entreprise + Dép. + Métier)
   tr.appendChild(el('td', { class: 'px-3 py-4', colspan: 3 },
-    el('div', { class: 'flex flex-wrap items-baseline gap-x-3 gap-y-1' },
-      el('span', {
-        class: isUnknownCompany
-          ? 'text-base font-semibold italic text-zinc-400'
-          : 'text-base font-semibold text-zinc-900',
-      }, account.company_name),
-      el('span', { class: 'text-xs text-zinc-500' },
-        `${jobs.length} poste${jobs.length > 1 ? 's' : ''} prospecté${jobs.length > 1 ? 's' : ''}`,
+    el('div', { class: 'flex flex-col gap-1' },
+      el('div', { class: 'flex flex-wrap items-baseline gap-x-3 gap-y-1' },
+        el('span', {
+          class: isUnknownCompany
+            ? 'text-base font-semibold italic text-zinc-400'
+            : 'text-base font-semibold text-zinc-900',
+        }, account.company_name),
+        el('span', { class: 'text-xs text-zinc-500' },
+          `${jobs.length} poste${jobs.length > 1 ? 's' : ''}`,
+        ),
+        contactsCount > 0
+          ? el('span', { class: 'text-xs text-zinc-500' }, `· ${contactsCount} contact${contactsCount > 1 ? 's' : ''}`)
+          : null,
+        latestProspectedAt
+          ? el('span', { class: 'text-xs text-zinc-400' }, `· Dernier prospect : ${formatDate(latestProspectedAt)}`)
+          : null,
+        isUnknownCompany ? el('button', {
+          type: 'button',
+          class: 'text-xs text-blue-600 underline-offset-2 hover:underline',
+          title: 'Renseigner le nom de l\'entreprise',
+          onClick: (e) => {
+            e.stopPropagation();
+            void renameCompanyPrompt(jobs[0]);
+          },
+        }, '✎ Renseigner') : null,
       ),
-      latestProspectedAt
-        ? el('span', { class: 'text-xs text-zinc-400' }, `Dernier : ${formatDate(latestProspectedAt)}`)
+      // Prochaine action (si définie)
+      account.next_action || account.next_action_at
+        ? el('div', { class: 'flex items-center gap-2 text-xs ' + (isDue ? 'text-amber-800' : 'text-zinc-500') },
+            el('span', {}, isDue ? '⏰' : '📅'),
+            el('span', {},
+              (account.next_action ?? 'Action à venir') +
+              (account.next_action_at ? ` · ${formatDate(account.next_action_at)}` : ''),
+            ),
+          )
         : null,
-      isUnknownCompany ? el('button', {
-        type: 'button',
-        class: 'text-xs text-blue-600 underline-offset-2 hover:underline',
-        title: 'Renseigner le nom de l\'entreprise',
-        onClick: (e) => {
-          e.stopPropagation();
-          void renameCompanyPrompt(jobs[0]);
-        },
-      }, '✎ Renseigner') : null,
     ),
   ));
 
-  // Statut (toujours Prospecté ici)
+  // Étape (badge dynamique selon stage)
   tr.appendChild(el('td', { class: 'px-3 py-4' },
-    el('span', { class: 'inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700 ring-1 ring-inset ring-emerald-100' },
-      el('span', { class: 'h-1.5 w-1.5 rounded-full bg-emerald-500' }),
-      'Prospecté',
+    el('span', {
+      class: `inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${stageCfg.cls}`,
+    },
+      el('span', { class: `h-1.5 w-1.5 rounded-full ${stageCfg.dot}` }),
+      stageCfg.label,
     ),
   ));
 
-  // Contact agrégé (max 3 lignes)
+  // Contact agrégé (account.contacts en priorité, fallback sur les jobs)
+  const contactLabels = account.contacts && account.contacts.length > 0
+    ? account.contacts.slice(0, 2).map((c) => c.name + (c.role ? ` (${c.role})` : ''))
+    : (() => {
+        const set = new Set();
+        for (const j of jobs) {
+          [j.contact_name, j.contact_email, j.contact_phone]
+            .filter(Boolean).forEach((c) => set.add(c));
+        }
+        return Array.from(set).slice(0, 2);
+      })();
   tr.appendChild(el('td', { class: 'px-3 py-4 text-xs text-zinc-600' },
-    contactSet.size
-      ? el('span', { class: 'whitespace-pre-line' }, Array.from(contactSet).slice(0, 3).join('\n'))
+    contactLabels.length
+      ? el('span', { class: 'whitespace-pre-line' }, contactLabels.join('\n'))
       : el('span', { class: 'text-zinc-300' }, '—'),
   ));
 
-  // Actions (vide pour l'instant — actions au niveau job dans la vue dépliée)
+  // Actions
   tr.appendChild(el('td', { class: 'px-3 py-4 pr-6 text-right text-xs text-zinc-400' },
-    expanded ? 'Replier' : 'Voir postes',
+    expanded ? 'Replier' : 'Voir détails',
   ));
 
   return tr;
+}
+
+// ============================================================================
+// Bandeau "à traiter aujourd'hui" + panneau d'édition d'un compte
+// ============================================================================
+
+function getDueAccounts() {
+  if (!store) return [];
+  const today = new Date().toISOString().slice(0, 10);
+  const prospectedAccountIds = new Set();
+  for (const j of store.jobs) {
+    if (j.status === 'prospected') prospectedAccountIds.add(j.account_id);
+  }
+  return store.accounts.filter((a) => {
+    if (!a.next_action_at) return false;
+    if (a.stage === 'gagne' || a.stage === 'perdu') return false;
+    if (!prospectedAccountIds.has(a.id)) return false;
+    return a.next_action_at.slice(0, 10) <= today;
+  });
+}
+
+function renderTodayBanner() {
+  const banner = document.getElementById('today-banner');
+  banner.innerHTML = '';
+  const due = getDueAccounts();
+  if (due.length === 0) return;
+
+  const preview = due.slice(0, 3).map((a) => a.company_name).join(', ')
+    + (due.length > 3 ? ` +${due.length - 3}` : '');
+
+  const box = el('div', {
+    class: 'mb-6 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-amber-200 bg-amber-50 px-5 py-3 text-sm text-amber-900 shadow-sm',
+  },
+    el('div', { class: 'flex items-center gap-3' },
+      el('span', { class: 'text-xl' }, '⏰'),
+      el('div', {},
+        el('p', { class: 'font-medium' },
+          `${due.length} compte${due.length > 1 ? 's' : ''} à traiter aujourd'hui`,
+        ),
+        el('p', { class: 'text-xs text-amber-800/70' }, preview),
+      ),
+    ),
+    el('button', {
+      type: 'button',
+      class: 'rounded-lg border border-amber-300 bg-white px-3 py-1.5 text-xs font-medium text-amber-900 transition hover:bg-amber-100',
+      onClick: () => {
+        // Bascule sur l'onglet Prospectés et déplie tous les comptes dus.
+        currentFilters = { ...currentFilters, status: 'prospected' };
+        writeFiltersToUrl(currentFilters);
+        for (const a of due) expandedAccounts.add(a.id);
+        render();
+        // Scroll vers le tableau.
+        document.getElementById('table-container')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      },
+    }, 'Voir →'),
+  );
+  banner.appendChild(box);
+}
+
+// Construit le panneau d'édition affiché sous une ligne de compte dépliée.
+// Contient : étapes du pipeline, prochaine action, notes, contacts, historique.
+function buildAccountExpandedPanel(account, totalCols) {
+  const wrap = el('tr', { class: 'border-b border-zinc-100 bg-zinc-50/40' });
+  const cell = el('td', { class: 'px-6 py-5', colspan: totalCols });
+  const panel = el('div', { class: 'flex flex-col gap-5' });
+
+  // === 1. Étape du pipeline ===
+  const stageRow = el('div', { class: 'flex flex-wrap items-center gap-2' });
+  stageRow.appendChild(el('span', {
+    class: 'mr-1 text-xs font-medium uppercase tracking-wider text-zinc-500',
+  }, 'Étape'));
+  for (const stage of STAGE_ORDER) {
+    const cfg = STAGE_CONFIG[stage];
+    const active = account.stage === stage;
+    const chip = el('button', {
+      type: 'button',
+      class: active
+        ? `inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium ring-1 ring-inset ${cfg.cls}`
+        : 'inline-flex items-center gap-1.5 rounded-full bg-white px-3 py-1 text-xs font-medium text-zinc-500 ring-1 ring-inset ring-zinc-200 transition hover:bg-zinc-50',
+      onClick: async (e) => {
+        e.stopPropagation();
+        if (active) return;
+        try {
+          const newStore = await patchAccount(account.id, { stage });
+          applyNewStore(newStore);
+        } catch (err) {
+          showToast(err.message ?? String(err), 'error');
+        }
+      },
+    },
+      el('span', { class: `h-1.5 w-1.5 rounded-full ${cfg.dot}` }),
+      cfg.label,
+    );
+    stageRow.appendChild(chip);
+  }
+  panel.appendChild(stageRow);
+
+  // === 2. Prochaine action ===
+  const nextRow = el('div', { class: 'flex flex-wrap items-center gap-2' });
+  nextRow.appendChild(el('span', {
+    class: 'mr-1 text-xs font-medium uppercase tracking-wider text-zinc-500',
+  }, 'Prochaine action'));
+  const labelInput = el('input', {
+    type: 'text',
+    placeholder: 'ex: rappeler Marie, envoyer le pitch...',
+    class: 'min-w-0 flex-1 rounded-lg border border-zinc-200 bg-white px-3 py-1.5 text-sm placeholder:text-zinc-400 focus:border-zinc-400 focus:outline-none focus:ring-2 focus:ring-zinc-900/10',
+  });
+  labelInput.value = account.next_action ?? '';
+  const dateInput = el('input', {
+    type: 'date',
+    class: 'rounded-lg border border-zinc-200 bg-white px-3 py-1.5 text-sm focus:border-zinc-400 focus:outline-none focus:ring-2 focus:ring-zinc-900/10',
+  });
+  dateInput.value = account.next_action_at ? account.next_action_at.slice(0, 10) : '';
+
+  let saving = false;
+  const saveNextAction = async () => {
+    if (saving) return;
+    const newAction = labelInput.value.trim() || null;
+    const newDate = dateInput.value
+      ? new Date(dateInput.value + 'T09:00:00').toISOString()
+      : null;
+    if (newAction === (account.next_action ?? null) &&
+        newDate === (account.next_action_at ?? null)) {
+      return; // pas de changement
+    }
+    saving = true;
+    try {
+      const newStore = await patchAccount(account.id, {
+        next_action: newAction,
+        next_action_at: newDate,
+      });
+      applyNewStore(newStore);
+    } catch (err) {
+      showToast(err.message ?? String(err), 'error');
+    } finally {
+      saving = false;
+    }
+  };
+  labelInput.addEventListener('blur', saveNextAction);
+  dateInput.addEventListener('change', saveNextAction);
+  nextRow.appendChild(labelInput);
+  nextRow.appendChild(dateInput);
+  if (account.next_action || account.next_action_at) {
+    nextRow.appendChild(el('button', {
+      type: 'button',
+      class: 'text-xs text-zinc-500 underline-offset-2 hover:text-zinc-900 hover:underline',
+      onClick: async (e) => {
+        e.stopPropagation();
+        try {
+          const newStore = await patchAccount(account.id, {
+            next_action: null, next_action_at: null,
+          });
+          applyNewStore(newStore);
+        } catch (err) {
+          showToast(err.message ?? String(err), 'error');
+        }
+      },
+    }, 'Effacer'));
+  }
+  // Indicateur "en retard" si date <= today
+  if (account.next_action_at) {
+    const today = new Date().toISOString().slice(0, 10);
+    if (account.next_action_at.slice(0, 10) <= today) {
+      nextRow.appendChild(el('span', {
+        class: 'inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700 ring-1 ring-inset ring-amber-200',
+      }, '⏰ À traiter'));
+    }
+  }
+  panel.appendChild(nextRow);
+
+  // === 3. Notes ===
+  const notesWrap = el('div', { class: 'flex flex-col gap-1.5' });
+  notesWrap.appendChild(el('span', {
+    class: 'text-xs font-medium uppercase tracking-wider text-zinc-500',
+  }, 'Notes'));
+  const notesArea = el('textarea', {
+    rows: 2,
+    placeholder: 'Contexte, blocages, prochaines étapes...',
+    class: 'rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm placeholder:text-zinc-400 focus:border-zinc-400 focus:outline-none focus:ring-2 focus:ring-zinc-900/10',
+  });
+  notesArea.value = account.notes ?? '';
+  let savingNotes = false;
+  notesArea.addEventListener('blur', async () => {
+    if (savingNotes) return;
+    const newNotes = notesArea.value.trim() || null;
+    if (newNotes === (account.notes ?? null)) return;
+    savingNotes = true;
+    try {
+      const newStore = await patchAccount(account.id, { notes: newNotes });
+      applyNewStore(newStore);
+    } catch (err) {
+      showToast(err.message ?? String(err), 'error');
+    } finally {
+      savingNotes = false;
+    }
+  });
+  notesWrap.appendChild(notesArea);
+  panel.appendChild(notesWrap);
+
+  // === 4. Contacts ===
+  const contactsWrap = el('div', { class: 'flex flex-col gap-2' });
+  const contactsHeader = el('div', { class: 'flex items-center justify-between' },
+    el('span', { class: 'text-xs font-medium uppercase tracking-wider text-zinc-500' },
+      `Contacts${account.contacts.length > 0 ? ` (${account.contacts.length})` : ''}`,
+    ),
+    el('button', {
+      type: 'button',
+      class: 'inline-flex items-center gap-1 rounded-lg border border-zinc-300 bg-white px-2.5 py-1 text-xs font-medium text-zinc-700 shadow-sm transition hover:bg-zinc-50',
+      onClick: (e) => {
+        e.stopPropagation();
+        editingContact = { accountId: account.id, contactId: null };
+        render();
+      },
+    }, '+ Ajouter contact'),
+  );
+  contactsWrap.appendChild(contactsHeader);
+
+  const contactsGrid = el('div', { class: 'grid gap-2 sm:grid-cols-2' });
+  // Formulaire d'ajout en première position s'il est ouvert.
+  if (editingContact && editingContact.accountId === account.id && editingContact.contactId === null) {
+    contactsGrid.appendChild(buildContactForm(account, null));
+  }
+  for (const c of account.contacts) {
+    if (editingContact && editingContact.accountId === account.id && editingContact.contactId === c.id) {
+      contactsGrid.appendChild(buildContactForm(account, c));
+    } else {
+      contactsGrid.appendChild(buildContactCard(account, c));
+    }
+  }
+  if (account.contacts.length === 0 && !(editingContact && editingContact.accountId === account.id && editingContact.contactId === null)) {
+    contactsGrid.appendChild(el('p', { class: 'text-sm text-zinc-400 italic' }, 'Aucun contact pour le moment.'));
+  }
+  contactsWrap.appendChild(contactsGrid);
+  panel.appendChild(contactsWrap);
+
+  // === 5. Activity log ===
+  if (account.activity && account.activity.length > 0) {
+    const log = el('details', { class: 'group' });
+    log.appendChild(el('summary', {
+      class: 'cursor-pointer text-xs font-medium uppercase tracking-wider text-zinc-500 hover:text-zinc-900 list-none',
+    }, `Historique (${account.activity.length}) ▾`));
+    const ul = el('ul', { class: 'mt-2 flex flex-col gap-1 text-xs text-zinc-600 pl-2 border-l-2 border-zinc-200' });
+    // Ordre antéchronologique
+    const sorted = account.activity.slice().sort((a, b) => b.at.localeCompare(a.at));
+    for (const entry of sorted.slice(0, 30)) {
+      const when = new Date(entry.at).toLocaleString('fr-FR', {
+        day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit',
+      });
+      ul.appendChild(el('li', { class: 'pl-3' },
+        el('span', { class: 'text-zinc-400' }, when + ' · '),
+        el('span', {}, entry.message),
+      ));
+    }
+    log.appendChild(ul);
+    panel.appendChild(log);
+  }
+
+  cell.appendChild(panel);
+  wrap.appendChild(cell);
+  return wrap;
+}
+
+function buildContactCard(account, contact) {
+  const card = el('div', {
+    class: 'flex items-start justify-between gap-3 rounded-lg border border-zinc-200 bg-white p-3',
+  });
+  const info = el('div', { class: 'flex flex-col gap-0.5 text-sm' });
+  info.appendChild(el('div', { class: 'flex items-baseline gap-2' },
+    el('span', { class: 'font-medium text-zinc-900' }, contact.name),
+    contact.role ? el('span', { class: 'text-xs text-zinc-500' }, '· ' + contact.role) : null,
+  ));
+  if (contact.email) {
+    info.appendChild(el('a', {
+      href: `mailto:${contact.email}`,
+      class: 'text-xs text-blue-600 hover:underline',
+      onClick: (e) => e.stopPropagation(),
+    }, contact.email));
+  }
+  if (contact.phone) {
+    info.appendChild(el('a', {
+      href: `tel:${contact.phone.replace(/\s+/g, '')}`,
+      class: 'text-xs text-zinc-600 hover:underline',
+      onClick: (e) => e.stopPropagation(),
+    }, contact.phone));
+  }
+  if (contact.notes) {
+    info.appendChild(el('p', { class: 'text-xs text-zinc-500 italic' }, contact.notes));
+  }
+  card.appendChild(info);
+
+  const actions = el('div', { class: 'flex shrink-0 items-center gap-1' });
+  actions.appendChild(el('button', {
+    type: 'button',
+    class: 'rounded-md p-1 text-xs text-zinc-500 transition hover:bg-zinc-100 hover:text-zinc-900',
+    title: 'Éditer',
+    onClick: (e) => {
+      e.stopPropagation();
+      editingContact = { accountId: account.id, contactId: contact.id };
+      render();
+    },
+  }, '✎'));
+  actions.appendChild(el('button', {
+    type: 'button',
+    class: 'rounded-md p-1 text-xs text-red-500 transition hover:bg-red-50',
+    title: 'Supprimer ce contact',
+    onClick: async (e) => {
+      e.stopPropagation();
+      if (!window.confirm(`Supprimer le contact "${contact.name}" ?`)) return;
+      try {
+        const newStore = await deleteContact(account.id, contact.id);
+        applyNewStore(newStore);
+      } catch (err) {
+        showToast(err.message ?? String(err), 'error');
+      }
+    },
+  }, '✕'));
+  card.appendChild(actions);
+  return card;
+}
+
+function buildContactForm(account, existing) {
+  const card = el('div', {
+    class: 'flex flex-col gap-2 rounded-lg border border-zinc-300 bg-white p-3 ring-2 ring-zinc-900/5',
+  });
+  const inputClass = 'rounded-md border border-zinc-200 bg-white px-2.5 py-1.5 text-sm placeholder:text-zinc-400 focus:border-zinc-400 focus:outline-none focus:ring-2 focus:ring-zinc-900/10';
+  const nameInput = el('input', { type: 'text', placeholder: 'Nom *', class: inputClass });
+  const roleInput = el('input', { type: 'text', placeholder: 'Rôle (DRH, manager...)', class: inputClass });
+  const emailInput = el('input', { type: 'email', placeholder: 'Email', class: inputClass });
+  const phoneInput = el('input', { type: 'tel', placeholder: 'Téléphone', class: inputClass });
+  const notesInput = el('input', { type: 'text', placeholder: 'Notes', class: inputClass });
+  if (existing) {
+    nameInput.value = existing.name;
+    roleInput.value = existing.role ?? '';
+    emailInput.value = existing.email ?? '';
+    phoneInput.value = existing.phone ?? '';
+    notesInput.value = existing.notes ?? '';
+  }
+  card.appendChild(nameInput);
+  const grid = el('div', { class: 'grid grid-cols-2 gap-2' });
+  grid.appendChild(roleInput);
+  grid.appendChild(phoneInput);
+  card.appendChild(grid);
+  card.appendChild(emailInput);
+  card.appendChild(notesInput);
+
+  const actions = el('div', { class: 'flex justify-end gap-2' });
+  actions.appendChild(el('button', {
+    type: 'button',
+    class: 'rounded-md border border-zinc-200 bg-white px-3 py-1 text-xs font-medium text-zinc-700 transition hover:bg-zinc-50',
+    onClick: (e) => {
+      e.stopPropagation();
+      editingContact = null;
+      render();
+    },
+  }, 'Annuler'));
+  actions.appendChild(el('button', {
+    type: 'button',
+    class: 'rounded-md bg-zinc-900 px-3 py-1 text-xs font-medium text-white transition hover:bg-zinc-700',
+    onClick: async (e) => {
+      e.stopPropagation();
+      const payload = {
+        name: nameInput.value.trim(),
+        role: roleInput.value.trim() || null,
+        email: emailInput.value.trim() || null,
+        phone: phoneInput.value.trim() || null,
+        notes: notesInput.value.trim() || null,
+      };
+      if (!payload.name) {
+        showToast('Le nom est obligatoire.', 'error');
+        return;
+      }
+      try {
+        const newStore = existing
+          ? await updateContact(account.id, existing.id, payload)
+          : await addContact(account.id, payload);
+        editingContact = null;
+        applyNewStore(newStore);
+      } catch (err) {
+        showToast(err.message ?? String(err), 'error');
+      }
+    },
+  }, existing ? 'Enregistrer' : 'Ajouter'));
+  card.appendChild(actions);
+  return card;
 }
 
 // ============================================================================
@@ -970,6 +1439,11 @@ function renderTable() {
         ?? { id: accountId, company_name: jobs[0].company_name };
       tbody.appendChild(buildAccountGroupRow(account, jobs));
       if (expandedAccounts.has(accountId)) {
+        // Panneau d'édition (étape, prochaine action, contacts, historique)
+        // — uniquement pour les comptes "vrais" présents dans store.accounts.
+        if (store.accounts.find((a) => a.id === accountId)) {
+          tbody.appendChild(buildAccountExpandedPanel(account, 8));
+        }
         for (const job of jobs) {
           tbody.appendChild(buildJobRow(job, { showCheckbox: false, indented: true }));
           visibleJobsCache.push(job);
@@ -1119,6 +1593,7 @@ function renderFooter() {
 function render() {
   if (!store) return;
   renderStats();
+  renderTodayBanner();
   renderTabs();
   renderFilters();
   renderBulkBar();
