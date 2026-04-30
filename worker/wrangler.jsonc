@@ -5,5 +5,11 @@
   "compatibility_date": "2025-02-10",
   "observability": {
     "enabled": true
-  }
+  },
+  "kv_namespaces": [
+    {
+      "binding": "LEADS_STORE",
+      "id": "afcaf16b6dba4aae98bb8e83cace2a8e"
+    }
+  ]
 }

@@ -1,25 +1,33 @@
 // Worker Cloudflare multi-endpoints :
 //   - GET    /offres                        : proxy vers l'API France Travail
-//   - PATCH  /leads/:id                     : modifie un lead dans leads.json (via API GitHub)
-//   - DELETE /leads/:id                     : supprime un lead de leads.json
+//   - GET    /leads                         : lit le store complet (public, pas d'auth)
+//   - PATCH  /leads/:id                     : modifie un lead (KV)
+//   - DELETE /leads/:id                     : supprime un lead + ajoute aux tombstones
 //   - POST   /leads/mark-all-prospected     : bascule en masse plusieurs leads en 'prospected'
-//   - POST   /ingest/france-travail         : déclenche le workflow GitHub Actions d'ingestion
+//   - POST   /leads/bulk-upsert             : ingère un lot d'offres FT (appelé par enrich.yml)
+//   - POST   /ingest/france-travail         : déclenche le workflow GitHub Actions d'enrich
 //
-// Authentification : secret partagé dans le header X-API-Key (vs SHARED_API_KEY).
-// Les credentials France Travail + le token GitHub sont des secrets Cloudflare.
+// Authentification : X-API-Key (vs SHARED_API_KEY). GET /leads est volontairement public
+// pour préserver la compat avec l'ancien fetch direct du fichier statique.
+//
+// Stockage : namespace KV `LEADS_STORE`, clé unique `store` contenant tout le JSON.
 
 interface Env {
   FRANCE_TRAVAIL_CLIENT_ID: string;
   FRANCE_TRAVAIL_CLIENT_SECRET: string;
   SHARED_API_KEY: string;
+  // Toujours utile pour déclencher le workflow GitHub Actions d'enrich (workflow_dispatch).
   GITHUB_KEY: string;
+  // KV : tout le store des leads en une seule clé.
+  LEADS_STORE: KVNamespace;
 }
 
-// Repo cible hardcodé (pas un secret : c'est une valeur publique).
 const GITHUB_REPO = 'Bapt252/leads';
+const ENRICH_WORKFLOW = 'enrich.yml';
+const STORE_KEY = 'store';
 
 // ----------------------------------------------------------------------------
-// Partie France Travail (inchangée).
+// Partie France Travail (proxy /offres) — inchangée.
 // ----------------------------------------------------------------------------
 
 const TOKEN_URL =
@@ -27,11 +35,7 @@ const TOKEN_URL =
 const SEARCH_URL =
   'https://api.francetravail.io/partenaire/offresdemploi/v2/offres/search';
 
-// L'API France Travail limite une recherche à 5 départements max.
-// On découpe donc l'IDF (8 départements) en 2 batches.
 const IDF_BATCHES = ['75,92,93,94', '77,78,91,95'];
-
-// Limite API : 150 résultats par page, 3000 résultats max par requête.
 const PAGE_SIZE = 150;
 const MAX_OFFSET = 3000;
 
@@ -97,8 +101,6 @@ async function handleOffres(req: Request, env: Env): Promise<Response> {
   if (!minCreationDate) {
     return new Response('Missing minCreationDate query param', { status: 400 });
   }
-  // min + max figé à "maintenant" pour toute l'opération (évite qu'une offre
-  // arrivée pendant la pagination ne décale les résultats).
   const maxCreationDate = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
 
   const token = await getAccessToken(env);
@@ -122,11 +124,8 @@ async function handleOffres(req: Request, env: Env): Promise<Response> {
 }
 
 // ----------------------------------------------------------------------------
-// Partie GitHub (nouveau).
+// Types domaine.
 // ----------------------------------------------------------------------------
-
-const LEADS_PATH = 'data/leads.json';
-const ENRICH_WORKFLOW = 'enrich.yml';
 
 type JobStatus = 'new' | 'prospected';
 
@@ -138,16 +137,6 @@ type AccountStage =
   | 'qualifie'
   | 'gagne'
   | 'perdu';
-
-const ACCOUNT_STAGES: readonly AccountStage[] = [
-  'nouveau',
-  'contacte',
-  'relance',
-  'rdv',
-  'qualifie',
-  'gagne',
-  'perdu',
-] as const;
 
 type ActivityKind = 'stage_change' | 'note' | 'contact' | 'system';
 
@@ -201,6 +190,9 @@ interface LeadsStore {
   updated_at: string;
   accounts: Account[];
   jobs: Job[];
+  // IDs d'offres supprimées par l'utilisateur. Filtrées à l'ingestion pour
+  // ne pas faire revenir une offre qu'on a explicitement écartée.
+  tombstones: string[];
 }
 
 interface LeadPatch {
@@ -214,18 +206,10 @@ interface LeadPatch {
   notes?: string | null;
 }
 
-interface AccountPatch {
-  stage?: AccountStage;
-  contact_name?: string | null;
-  contact_email?: string | null;
-  contact_phone?: string | null;
-  notes?: string | null;
-  next_action?: string | null;
-  next_action_at?: string | null;
-  last_contact_at?: string | null;
-}
+// ----------------------------------------------------------------------------
+// Helpers domaine.
+// ----------------------------------------------------------------------------
 
-// Normalise un nom d'entreprise pour la dédup (même logique que src/lib/store.ts).
 function normalizeCompanyName(name: string): string {
   return name
     .toLowerCase()
@@ -235,95 +219,109 @@ function normalizeCompanyName(name: string): string {
     .trim();
 }
 
-// ID stable d'Account dérivé du nom normalisé (choix A : dédup sur company_name).
 function accountIdFor(companyName: string): string {
   const n = normalizeCompanyName(companyName);
   const slug = n.replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 80);
   return slug || 'entreprise-inconnue';
 }
 
-interface GhContent {
-  content: string;
-  sha: string;
-  encoding: string;
+interface FTOffre {
+  id: string;
+  intitule: string;
+  dateCreation: string;
+  lieuTravail?: { libelle?: string; codePostal?: string };
+  entreprise?: { nom?: string };
+  origineOffre?: { urlOrigine?: string };
+  secteurActiviteLibelle?: string;
+  romeLibelle?: string;
 }
 
-function ghHeaders(env: Env): Headers {
-  const h = new Headers();
-  h.set('Authorization', `Bearer ${env.GITHUB_KEY}`);
-  h.set('Accept', 'application/vnd.github+json');
-  h.set('X-GitHub-Api-Version', '2022-11-28');
-  h.set('User-Agent', 'leads-worker');
-  return h;
+type SourceFields = Pick<
+  Job,
+  | 'id'
+  | 'source'
+  | 'source_url'
+  | 'company_name'
+  | 'job_title'
+  | 'location'
+  | 'posted_at'
+  | 'departement'
+  | 'sector'
+  | 'rome_label'
+>;
+
+function mapOffre(offre: FTOffre): SourceFields {
+  const codePostal = offre.lieuTravail?.codePostal;
+  const departement =
+    codePostal && /^\d{5}$/.test(codePostal) ? codePostal.slice(0, 2) : null;
+  return {
+    id: `ft:${offre.id}`,
+    source: 'france_travail',
+    source_url:
+      offre.origineOffre?.urlOrigine ??
+      `https://candidat.francetravail.fr/offres/recherche/detail/${offre.id}`,
+    company_name: offre.entreprise?.nom ?? 'Non communiqué',
+    job_title: offre.intitule,
+    location: offre.lieuTravail?.libelle ?? null,
+    posted_at: offre.dateCreation,
+    departement,
+    sector: offre.secteurActiviteLibelle ?? null,
+    rome_label: offre.romeLibelle ?? null,
+  };
 }
 
-// Encode une string UTF-8 en base64 (btoa ne gère pas l'UTF-8 directement).
-function toBase64(str: string): string {
-  const bytes = new TextEncoder().encode(str);
-  let bin = '';
-  for (const b of bytes) bin += String.fromCharCode(b);
-  return btoa(bin);
+// ----------------------------------------------------------------------------
+// KV I/O.
+// ----------------------------------------------------------------------------
+
+function emptyStore(): LeadsStore {
+  return {
+    version: 2,
+    updated_at: new Date().toISOString(),
+    accounts: [],
+    jobs: [],
+    tombstones: [],
+  };
 }
 
-async function getLeadsFile(
+async function getStore(env: Env): Promise<LeadsStore> {
+  const raw = await env.LEADS_STORE.get(STORE_KEY);
+  if (raw === null) return emptyStore();
+  const parsed = JSON.parse(raw) as Partial<LeadsStore>;
+  // Garde-fou pour stores écrits avant l'ajout du champ tombstones.
+  return {
+    version: 2,
+    updated_at: parsed.updated_at ?? new Date().toISOString(),
+    accounts: parsed.accounts ?? [],
+    jobs: parsed.jobs ?? [],
+    tombstones: parsed.tombstones ?? [],
+  };
+}
+
+async function putStore(env: Env, store: LeadsStore): Promise<void> {
+  store.updated_at = new Date().toISOString();
+  await env.LEADS_STORE.put(STORE_KEY, JSON.stringify(store));
+}
+
+// Lit le store, applique une mutation, réécrit. KV est atomic per key, donc
+// pas de retry/CAS comme avec l'API GitHub Contents : un seul writer suffit.
+async function mutateStore(
   env: Env,
-): Promise<{ store: LeadsStore; sha: string }> {
-  const res = await fetch(
-    `https://api.github.com/repos/${GITHUB_REPO}/contents/${LEADS_PATH}`,
-    { headers: ghHeaders(env) },
-  );
-  if (!res.ok) {
-    throw new Error(`GET leads.json a échoué : ${res.status} ${await res.text()}`);
-  }
-  const data = (await res.json()) as GhContent;
-  if (data.encoding !== 'base64') {
-    throw new Error(`Encodage GitHub inattendu : ${data.encoding}`);
-  }
-  const json = atob(data.content.replace(/\n/g, ''));
-  return { store: JSON.parse(json) as LeadsStore, sha: data.sha };
+  mutate: (store: LeadsStore) => { ok: true } | { ok: false; response: Response },
+): Promise<Response> {
+  const store = await getStore(env);
+  const result = mutate(store);
+  if (!result.ok) return result.response;
+  await putStore(env, store);
+  // On renvoie le store complet pour que le front n'ait pas à refetcher
+  // (la lecture KV juste après une écriture peut servir une valeur stale).
+  return Response.json({ ok: true, store });
 }
 
-async function putLeadsFile(
-  env: Env,
-  store: LeadsStore,
-  sha: string,
-  message: string,
-): Promise<void> {
-  const content = JSON.stringify(store, null, 2) + '\n';
-  const res = await fetch(
-    `https://api.github.com/repos/${GITHUB_REPO}/contents/${LEADS_PATH}`,
-    {
-      method: 'PUT',
-      headers: ghHeaders(env),
-      body: JSON.stringify({ message, content: toBase64(content), sha }),
-    },
-  );
-  if (!res.ok) {
-    const body = await res.text();
-    const err = new Error(`PUT leads.json a échoué : ${res.status} ${body}`);
-    // Marquage du conflit de SHA pour permettre un retry.
-    (err as Error & { status?: number }).status = res.status;
-    throw err;
-  }
-}
+// ----------------------------------------------------------------------------
+// Validation patch.
+// ----------------------------------------------------------------------------
 
-async function dispatchEnrich(env: Env): Promise<void> {
-  const res = await fetch(
-    `https://api.github.com/repos/${GITHUB_REPO}/actions/workflows/${ENRICH_WORKFLOW}/dispatches`,
-    {
-      method: 'POST',
-      headers: ghHeaders(env),
-      body: JSON.stringify({ ref: 'main' }),
-    },
-  );
-  if (!res.ok) {
-    throw new Error(
-      `workflow_dispatch a échoué : ${res.status} ${await res.text()}`,
-    );
-  }
-}
-
-// Normalise un champ texte : trim, '' → null.
 function normStr(v: unknown): string | null | undefined {
   if (v === undefined) return undefined;
   if (v === null) return null;
@@ -332,7 +330,6 @@ function normStr(v: unknown): string | null | undefined {
   return t === '' ? null : t;
 }
 
-// Valide + normalise un body PATCH. Retourne null si invalide.
 function parsePatch(body: unknown): LeadPatch | null {
   if (typeof body !== 'object' || body === null) return null;
   const b = body as Record<string, unknown>;
@@ -360,15 +357,12 @@ function parsePatch(body: unknown): LeadPatch | null {
 function applyPatch(store: LeadsStore, job: Job, patch: LeadPatch): void {
   if (patch.status !== undefined) {
     job.status = patch.status;
-    // prospected_at figé à la première bascule (idempotent ensuite).
     if (patch.status === 'prospected' && !job.prospected_at) {
       job.prospected_at = new Date().toISOString();
     }
   }
   if (patch.company_name !== undefined && patch.company_name !== job.company_name) {
     job.company_name = patch.company_name;
-    // Re-dérive account_id pour rester cohérent avec la dédup côté Next.js,
-    // et crée le compte s'il n'existe pas déjà.
     const newAccountId = accountIdFor(patch.company_name);
     job.account_id = newAccountId;
     if (!store.accounts.find((a) => a.id === newAccountId)) {
@@ -396,27 +390,13 @@ function applyPatch(store: LeadsStore, job: Job, patch: LeadPatch): void {
   if (patch.notes !== undefined) job.notes = patch.notes;
 }
 
-// Lit leads.json, applique une mutation, réécrit. Retry 1x si 409 (race).
-async function mutateLeads(
-  env: Env,
-  message: string,
-  mutate: (store: LeadsStore) => { ok: true } | { ok: false; response: Response },
-): Promise<Response> {
-  for (let attempt = 0; attempt < 2; attempt++) {
-    const { store, sha } = await getLeadsFile(env);
-    const result = mutate(store);
-    if (!result.ok) return result.response;
-    store.updated_at = new Date().toISOString();
-    try {
-      await putLeadsFile(env, store, sha, message);
-      return Response.json({ ok: true });
-    } catch (err) {
-      const status = (err as Error & { status?: number }).status;
-      if (status === 409 && attempt === 0) continue;
-      throw err;
-    }
-  }
-  return new Response('Conflit GitHub persistant', { status: 409 });
+// ----------------------------------------------------------------------------
+// Handlers leads.
+// ----------------------------------------------------------------------------
+
+async function handleGetLeads(env: Env): Promise<Response> {
+  const store = await getStore(env);
+  return Response.json(store);
 }
 
 async function handlePatchLead(
@@ -428,7 +408,7 @@ async function handlePatchLead(
   const patch = parsePatch(body);
   if (!patch) return new Response('Body invalide', { status: 400 });
 
-  return mutateLeads(env, `chore(leads): modif ${leadId}`, (store) => {
+  return mutateStore(env, (store) => {
     const job = store.jobs.find((j) => j.id === leadId);
     if (!job) {
       return { ok: false, response: new Response('Lead not found', { status: 404 }) };
@@ -439,12 +419,15 @@ async function handlePatchLead(
 }
 
 async function handleDeleteLead(env: Env, leadId: string): Promise<Response> {
-  return mutateLeads(env, `chore(leads): suppr ${leadId}`, (store) => {
+  return mutateStore(env, (store) => {
     const idx = store.jobs.findIndex((j) => j.id === leadId);
     if (idx === -1) {
       return { ok: false, response: new Response('Lead not found', { status: 404 }) };
     }
     store.jobs.splice(idx, 1);
+    if (!store.tombstones.includes(leadId)) {
+      store.tombstones.push(leadId);
+    }
     return { ok: true };
   });
 }
@@ -458,9 +441,12 @@ async function handleMarkAllProspected(
     return new Response('Body attendu : { ids: string[] }', { status: 400 });
   }
   const ids = new Set(body.ids as string[]);
-  if (ids.size === 0) return Response.json({ ok: true, updated: 0 });
+  if (ids.size === 0) {
+    const store = await getStore(env);
+    return Response.json({ ok: true, store });
+  }
 
-  return mutateLeads(env, `chore(leads): prospected x${ids.size}`, (store) => {
+  return mutateStore(env, (store) => {
     const now = new Date().toISOString();
     for (const j of store.jobs) {
       if (ids.has(j.id) && j.status === 'new') {
@@ -472,44 +458,128 @@ async function handleMarkAllProspected(
   });
 }
 
+// Ingère un lot d'offres FT brutes : dédoublonne contre tombstones et store
+// actuel, ajoute les nouvelles, backfill les champs source nuls des existantes.
+async function handleBulkUpsert(req: Request, env: Env): Promise<Response> {
+  const body = (await req.json().catch(() => null)) as { offres?: unknown } | null;
+  if (!body || !Array.isArray(body.offres)) {
+    return new Response('Body attendu : { offres: FTOffre[] }', { status: 400 });
+  }
+
+  const store = await getStore(env);
+  const tombstones = new Set(store.tombstones);
+  const byId = new Map(store.jobs.map((j) => [j.id, j]));
+  const accountIds = new Set(store.accounts.map((a) => a.id));
+  const now = new Date().toISOString();
+  let added = 0;
+  let touched = 0;
+  let skipped = 0;
+
+  for (const offreRaw of body.offres as FTOffre[]) {
+    if (
+      !offreRaw ||
+      typeof offreRaw.id !== 'string' ||
+      typeof offreRaw.intitule !== 'string'
+    ) {
+      continue;
+    }
+    const id = `ft:${offreRaw.id}`;
+    if (tombstones.has(id)) {
+      skipped++;
+      continue;
+    }
+    const source = mapOffre(offreRaw);
+    const existing = byId.get(id);
+    if (existing) {
+      existing.departement ??= source.departement;
+      existing.sector ??= source.sector;
+      existing.rome_label ??= source.rome_label;
+      touched++;
+    } else {
+      const accountId = accountIdFor(source.company_name);
+      if (!accountIds.has(accountId)) {
+        store.accounts.push({
+          id: accountId,
+          company_name: source.company_name,
+          stage: 'nouveau',
+          contact_name: null,
+          contact_email: null,
+          contact_phone: null,
+          notes: null,
+          last_contact_at: null,
+          next_action: null,
+          next_action_at: null,
+          activity: [],
+          created_at: now,
+          updated_at: now,
+        });
+        accountIds.add(accountId);
+      }
+      const job: Job = {
+        ...source,
+        account_id: accountId,
+        status: 'new',
+        contact_name: null,
+        contact_email: null,
+        contact_phone: null,
+        notes: null,
+        prospected_at: null,
+        created_at: now,
+      };
+      store.jobs.push(job);
+      byId.set(id, job);
+      added++;
+    }
+  }
+
+  await putStore(env, store);
+  return Response.json({
+    ok: true,
+    added,
+    touched,
+    skipped,
+    total: store.jobs.length,
+  });
+}
+
 async function handleIngestFT(env: Env): Promise<Response> {
   await dispatchEnrich(env);
   return Response.json({ ok: true, message: 'Workflow enrich déclenché' });
 }
 
-// Endpoint de diagnostic : teste le GITHUB_KEY en appelant /user +
-// liste les noms (sans valeurs) de tous les bindings env disponibles.
-async function handleDebugGithub(env: Env): Promise<Response> {
-  const envKeys = Object.keys(env as unknown as Record<string, unknown>).sort();
-  const key = env.GITHUB_KEY;
-  if (!key) {
-    return Response.json({
-      ok: false,
-      error: 'GITHUB_KEY absent dans env du Worker',
-      bindings_visibles_par_le_worker: envKeys,
-    });
+// ----------------------------------------------------------------------------
+// GitHub Actions workflow_dispatch (pour le bouton "Ingérer maintenant").
+// ----------------------------------------------------------------------------
+
+function ghHeaders(env: Env): Headers {
+  const h = new Headers();
+  h.set('Authorization', `Bearer ${env.GITHUB_KEY}`);
+  h.set('Accept', 'application/vnd.github+json');
+  h.set('X-GitHub-Api-Version', '2022-11-28');
+  h.set('User-Agent', 'leads-worker');
+  return h;
+}
+
+async function dispatchEnrich(env: Env): Promise<void> {
+  const res = await fetch(
+    `https://api.github.com/repos/${GITHUB_REPO}/actions/workflows/${ENRICH_WORKFLOW}/dispatches`,
+    {
+      method: 'POST',
+      headers: ghHeaders(env),
+      body: JSON.stringify({ ref: 'main' }),
+    },
+  );
+  if (!res.ok) {
+    throw new Error(
+      `workflow_dispatch a échoué : ${res.status} ${await res.text()}`,
+    );
   }
-  const res = await fetch('https://api.github.com/user', {
-    headers: ghHeaders(env),
-  });
-  const body = await res.text();
-  return Response.json({
-    bindings_visibles_par_le_worker: envKeys,
-    token_length: key.length,
-    token_prefix: key.slice(0, 4),
-    token_has_whitespace: /\s/.test(key),
-    github_status: res.status,
-    github_response: body.slice(0, 500),
-  });
 }
 
 // ----------------------------------------------------------------------------
 // Routeur.
 // ----------------------------------------------------------------------------
 
-// Headers CORS appliqués à toutes les réponses.
-// On autorise toute origine : la vraie protection est le header X-API-Key,
-// et ce Worker est lui-même destiné à être appelé depuis un front public.
 const CORS_HEADERS: Record<string, string> = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, POST, PATCH, DELETE, OPTIONS',
@@ -529,17 +599,8 @@ function withCors(res: Response): Response {
 
 export default {
   async fetch(req: Request, env: Env): Promise<Response> {
-    // Preflight CORS : le browser envoie OPTIONS avant tout PATCH/POST avec
-    // custom header (ici X-API-Key). On répond avant l'auth pour ne pas
-    // renvoyer 401 sur un preflight (ce qui bloquerait la vraie requête).
     if (req.method === 'OPTIONS') {
       return new Response(null, { status: 204, headers: CORS_HEADERS });
-    }
-
-    // Auth via secret partagé.
-    const providedKey = req.headers.get('X-API-Key');
-    if (!env.SHARED_API_KEY || providedKey !== env.SHARED_API_KEY) {
-      return withCors(new Response('Unauthorized', { status: 401 }));
     }
 
     const url = new URL(req.url);
@@ -547,28 +608,31 @@ export default {
     const method = req.method;
 
     try {
-      // GET /offres — proxy France Travail (inchangé).
+      // Endpoint public (lecture seule) — pas d'auth, pour la compat avec
+      // l'ancien fetch direct du fichier statique data/leads.json.
+      if (method === 'GET' && path === '/leads') {
+        return withCors(await handleGetLeads(env));
+      }
+
+      // Auth pour tout le reste.
+      const providedKey = req.headers.get('X-API-Key');
+      if (!env.SHARED_API_KEY || providedKey !== env.SHARED_API_KEY) {
+        return withCors(new Response('Unauthorized', { status: 401 }));
+      }
+
       if (method === 'GET' && path === '/offres') {
         return withCors(await handleOffres(req, env));
       }
-
-      // POST /ingest/france-travail — déclenche l'ingestion manuelle.
       if (method === 'POST' && path === '/ingest/france-travail') {
         return withCors(await handleIngestFT(env));
       }
-
-      // GET /debug/github — diagnostic du GITHUB_KEY.
-      if (method === 'GET' && path === '/debug/github') {
-        return withCors(await handleDebugGithub(env));
-      }
-
-      // POST /leads/mark-all-prospected — bascule en masse.
       if (method === 'POST' && path === '/leads/mark-all-prospected') {
         return withCors(await handleMarkAllProspected(req, env));
       }
+      if (method === 'POST' && path === '/leads/bulk-upsert') {
+        return withCors(await handleBulkUpsert(req, env));
+      }
 
-      // PATCH /leads/:id — modifie un lead.
-      // DELETE /leads/:id — supprime un lead.
       const match = path.match(/^\/leads\/(.+)$/);
       if (match) {
         const leadId = decodeURIComponent(match[1]);

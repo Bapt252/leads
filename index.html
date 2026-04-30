@@ -105,11 +105,12 @@
 // Configuration
 // ============================================================================
 
-// URL publique du JSON (même repo, branche main).
-const LEADS_URL = 'data/leads.json';
-
 // URL du Worker Cloudflare (pas un secret, juste une URL).
 const WORKER_URL = 'https://leads-france-travail.baptiste-coma.workers.dev';
+
+// Le store n'est plus un fichier statique : il vit dans Cloudflare KV et est
+// servi par le Worker. GET /leads est public (pas d'auth).
+const LEADS_URL = `${WORKER_URL}/leads`;
 
 // Clé API du Worker — option automatique, VISIBLE PUBLIQUEMENT dans le source.
 // Si tu colles ta SHARED_API_KEY ici, plus aucun prompt ne sera affiché ;
@@ -161,7 +162,7 @@ function ensureApiKey() {
 async function loadStore() {
   // ?t=<timestamp> pour contourner le cache navigateur après une écriture.
   const res = await fetch(`${LEADS_URL}?t=${Date.now()}`, { cache: 'no-store' });
-  if (!res.ok) throw new Error(`GET leads.json a échoué : ${res.status}`);
+  if (!res.ok) throw new Error(`GET /leads a échoué : ${res.status}`);
   return await res.json();
 }
 
@@ -186,25 +187,41 @@ async function workerFetch(path, init = {}) {
   return res;
 }
 
+// Toutes les mutations renvoient le store complet à jour. On l'utilise pour
+// rafraîchir l'UI sans refetch (KV peut servir une lecture stale juste après
+// une écriture).
 async function patchLead(id, patch) {
-  await workerFetch(`/leads/${encodeURIComponent(id)}`, {
+  const res = await workerFetch(`/leads/${encodeURIComponent(id)}`, {
     method: 'PATCH',
     body: JSON.stringify(patch),
   });
+  const data = await res.json();
+  return data.store;
 }
 
 async function deleteLead(id) {
-  await workerFetch(`/leads/${encodeURIComponent(id)}`, {
+  const res = await workerFetch(`/leads/${encodeURIComponent(id)}`, {
     method: 'DELETE',
   });
+  const data = await res.json();
+  return data.store;
 }
 
 async function markAllProspectedIds(ids) {
-  if (ids.length === 0) return;
-  await workerFetch('/leads/mark-all-prospected', {
+  if (ids.length === 0) return null;
+  const res = await workerFetch('/leads/mark-all-prospected', {
     method: 'POST',
     body: JSON.stringify({ ids }),
   });
+  const data = await res.json();
+  return data.store;
+}
+
+// Remplace le store local et redessine. Utilisé après chaque mutation.
+function applyNewStore(newStore) {
+  if (!newStore) return;
+  store = newStore;
+  render();
 }
 
 async function triggerIngest() {
@@ -394,7 +411,7 @@ document.getElementById('prospect-form').addEventListener('submit', async (e) =>
   submit.textContent = 'Enregistrement…';
   try {
     const id = form.dataset.jobId;
-    await patchLead(id, {
+    const newStore = await patchLead(id, {
       status: 'prospected',
       contact_name: emptyToNull(form.contact_name.value),
       contact_email: emptyToNull(form.contact_email.value),
@@ -402,7 +419,7 @@ document.getElementById('prospect-form').addEventListener('submit', async (e) =>
       notes: emptyToNull(form.notes.value),
     });
     document.getElementById('prospect-dialog').close();
-    await reload();
+    applyNewStore(newStore);
   } catch (err) {
     window.alert(`Échec : ${err.message ?? err}`);
   } finally {
@@ -544,8 +561,8 @@ function renderTable() {
           const trimmed = entered.trim();
           if (trimmed === '' || trimmed === 'Non communiqué') return;
           try {
-            await patchLead(job.id, { company_name: trimmed });
-            await reload();
+            const newStore = await patchLead(job.id, { company_name: trimmed });
+            applyNewStore(newStore);
           } catch (err) {
             showToast(err.message ?? String(err), 'error');
           }
@@ -597,8 +614,8 @@ function renderTable() {
       onClick: async () => {
         if (!window.confirm(`Supprimer cette offre ?\n\n${job.company_name} · ${job.job_title}`)) return;
         try {
-          await deleteLead(job.id);
-          await reload();
+          const newStore = await deleteLead(job.id);
+          applyNewStore(newStore);
         } catch (err) {
           showToast(err.message ?? String(err), 'error');
         }
@@ -684,9 +701,9 @@ document.getElementById('btn-mark-all').addEventListener('click', async () => {
   const ids = jobs.filter((j) => j.status === 'new').map((j) => j.id);
   if (ids.length === 0) return;
   try {
-    await markAllProspectedIds(ids);
+    const newStore = await markAllProspectedIds(ids);
     showToast(`${ids.length} offre(s) basculée(s) en prospected.`, 'info');
-    await reload();
+    applyNewStore(newStore);
   } catch (err) {
     showToast(err.message ?? String(err), 'error');
   }
