@@ -61,6 +61,7 @@
         </div>
       </div>
       <div id="filters" class="border-b border-zinc-100 px-6 py-3 flex flex-wrap items-center gap-2 text-sm"></div>
+      <div id="bulk-bar"></div>
       <div id="table-container"></div>
     </section>
 
@@ -126,8 +127,27 @@ const API_KEY_STORAGE = 'leads.worker_api_key';
 // État global
 // ============================================================================
 
-let store = null;           // { version, updated_at, jobs: [] }
+let store = null;           // { version, updated_at, jobs: [], accounts: [], tombstones: [] }
 let currentFilters = {};    // { status, departement, sector, rome_label }
+
+// IDs d'offres en cours de suppression (toast Annuler 5s en cours).
+// On les masque visuellement mais on ne les supprime pas tant que le timer
+// n'a pas expiré : permet l'annulation sans aller-retour serveur.
+const pendingDeletions = new Map(); // id -> { job, timer, toastEl }
+
+// Sélection multiple (checkbox).
+const selectedJobIds = new Set();
+let lastClickedJobId = null;        // pour Shift+click
+
+// Lignes Prospectés dépliées (account_id).
+const expandedAccounts = new Set();
+
+// ID de la ligne actuellement focus clavier (j/k navigation).
+let focusedJobId = null;
+
+// Cache des jobs visibles dans l'ordre courant — recomputé à chaque render
+// pour que j/k naviguent correctement après un filtre/tri.
+let visibleJobsCache = [];
 
 // ============================================================================
 // Helpers réseau
@@ -257,6 +277,10 @@ function writeFiltersToUrl(filters) {
 function updateFilter(key, value) {
   currentFilters = { ...currentFilters, [key]: value || undefined };
   writeFiltersToUrl(currentFilters);
+  // On vide la sélection multi à chaque changement de filtre/onglet, sinon
+  // l'utilisateur garde des sélections invisibles qu'il ne maîtrise plus.
+  selectedJobIds.clear();
+  lastClickedJobId = null;
   render();
 }
 
@@ -372,6 +396,59 @@ function showToast(msg, kind = 'info') {
     }, 'Fermer'),
   );
   container.appendChild(toast);
+}
+
+// Toast d'annulation avec barre de progression. onConfirm est appelé après
+// le délai (sauf si l'utilisateur clique Annuler avant). Renvoie un objet
+// avec une méthode dismiss() pour fermer le toast prématurément.
+function showUndoToast(msg, onConfirm, onUndo, durationMs = 5000) {
+  const container = document.getElementById('toast-container');
+  const toast = el('div', {
+    class: 'mb-6 overflow-hidden rounded-lg border border-amber-200 bg-amber-50 text-amber-900 shadow-sm',
+  });
+  const row = el('div', { class: 'flex items-center justify-between gap-3 px-4 py-3 text-sm' },
+    el('span', {}, msg),
+    el('div', { class: 'flex items-center gap-2' },
+      el('button', {
+        type: 'button',
+        class: 'rounded-md border border-amber-300 bg-white px-3 py-1 text-xs font-medium text-amber-900 transition hover:bg-amber-100',
+        onClick: () => {
+          if (state.done) return;
+          state.done = true;
+          clearTimeout(state.timer);
+          toast.remove();
+          onUndo?.();
+        },
+      }, 'Annuler'),
+    ),
+  );
+  const progress = el('div', {
+    class: 'h-1 bg-amber-400/60',
+    style: `width: 100%; transition: width ${durationMs}ms linear;`,
+  });
+  toast.appendChild(row);
+  toast.appendChild(progress);
+  container.appendChild(toast);
+  // Force un reflow puis lance l'animation (sinon transition saute).
+  void progress.offsetWidth;
+  progress.style.width = '0%';
+
+  const state = { done: false, timer: null };
+  state.timer = setTimeout(() => {
+    if (state.done) return;
+    state.done = true;
+    toast.remove();
+    onConfirm?.();
+  }, durationMs);
+
+  return {
+    dismiss() {
+      if (state.done) return;
+      state.done = true;
+      clearTimeout(state.timer);
+      toast.remove();
+    },
+  };
 }
 
 // ============================================================================
@@ -518,12 +595,313 @@ function renderFilters() {
   }
 }
 
+// ============================================================================
+// Suppression avec annulation 5s
+// ============================================================================
+
+function deleteWithUndo(job) {
+  // Si déjà en cours de suppression sur ce job, on ne refait rien.
+  if (pendingDeletions.has(job.id)) return;
+
+  const handle = showUndoToast(
+    `Offre supprimée : ${job.company_name} · ${job.job_title}`,
+    async () => {
+      // Délai écoulé : on supprime vraiment côté serveur.
+      pendingDeletions.delete(job.id);
+      try {
+        const newStore = await deleteLead(job.id);
+        applyNewStore(newStore);
+      } catch (err) {
+        showToast(`Échec suppression : ${err.message ?? err}`, 'error');
+        render();
+      }
+    },
+    () => {
+      // Annulation : on retire le pending et on redessine.
+      pendingDeletions.delete(job.id);
+      render();
+    },
+  );
+
+  pendingDeletions.set(job.id, { job, handle });
+  // Si focus sur cette ligne, on bouge le focus vers la prochaine visible
+  if (focusedJobId === job.id) {
+    const idx = visibleJobsCache.findIndex((j) => j.id === job.id);
+    const next = visibleJobsCache[idx + 1] ?? visibleJobsCache[idx - 1];
+    focusedJobId = next?.id ?? null;
+  }
+  render();
+}
+
+// ============================================================================
+// Renommage entreprise (factorisé : utilisé sur "Renseigner")
+// ============================================================================
+
+async function renameCompanyPrompt(job) {
+  const initial = job.company_name === 'Non communiqué' ? '' : job.company_name;
+  const entered = window.prompt('Nom de l\'entreprise :', initial);
+  if (entered === null) return;
+  const trimmed = entered.trim();
+  if (trimmed === '' || trimmed === 'Non communiqué') return;
+  try {
+    const newStore = await patchLead(job.id, { company_name: trimmed });
+    applyNewStore(newStore);
+  } catch (err) {
+    showToast(err.message ?? String(err), 'error');
+  }
+}
+
+// ============================================================================
+// Construction d'une ligne de job (réutilisée vue plate ET vue dépliée)
+// ============================================================================
+
+function buildJobRow(job, { showCheckbox = false, indented = false } = {}) {
+  const isFocused = focusedJobId === job.id;
+  const tr = el('tr', {
+    class: `border-b border-zinc-50 transition hover:bg-zinc-50/50 cursor-pointer${
+      isFocused ? ' bg-amber-50/40 ring-2 ring-inset ring-amber-300/60' : ''
+    }${indented ? ' bg-zinc-50/40' : ''}`,
+    'data-job-id': job.id,
+  });
+  tr.addEventListener('click', (e) => {
+    if (e.target.closest('button, a, input, label')) return;
+    focusedJobId = job.id;
+    render();
+  });
+
+  if (showCheckbox) {
+    const cb = el('input', {
+      type: 'checkbox',
+      class: 'h-4 w-4 cursor-pointer rounded border-zinc-300',
+    });
+    cb.checked = selectedJobIds.has(job.id);
+    cb.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const visIds = visibleJobsCache.map((j) => j.id);
+      if (e.shiftKey && lastClickedJobId && lastClickedJobId !== job.id) {
+        const a = visIds.indexOf(lastClickedJobId);
+        const b = visIds.indexOf(job.id);
+        if (a >= 0 && b >= 0) {
+          const [s, e2] = [Math.min(a, b), Math.max(a, b)];
+          const target = cb.checked;
+          for (let i = s; i <= e2; i++) {
+            if (target) selectedJobIds.add(visIds[i]);
+            else selectedJobIds.delete(visIds[i]);
+          }
+        }
+      } else {
+        if (cb.checked) selectedJobIds.add(job.id);
+        else selectedJobIds.delete(job.id);
+      }
+      lastClickedJobId = job.id;
+      render();
+    });
+    tr.appendChild(el('td', { class: 'px-3 py-3 first:pl-6' }, cb));
+  } else if (indented) {
+    tr.appendChild(el('td', { class: 'px-3 py-3 first:pl-12' }));
+  }
+
+  // Date
+  const dateClass = `whitespace-nowrap px-3 py-3 text-zinc-600${
+    !showCheckbox && !indented ? ' first:pl-6' : ''
+  }`;
+  tr.appendChild(el('td', { class: dateClass }, formatDate(job.posted_at)));
+
+  // Source
+  tr.appendChild(el('td', { class: 'px-3 py-3' },
+    el('span', { class: 'inline-flex rounded-md bg-zinc-100 px-2 py-0.5 text-xs font-medium text-zinc-700' }, 'France Travail'),
+  ));
+
+  // Entreprise · Poste
+  const isUnknownCompany = job.company_name === 'Non communiqué';
+  const companyLine = el('div', { class: 'flex items-center gap-2' },
+    el('span', {
+      class: isUnknownCompany ? 'font-medium italic text-zinc-400' : 'font-medium text-zinc-900',
+    }, job.company_name),
+    isUnknownCompany ? el('button', {
+      type: 'button',
+      class: 'text-xs text-blue-600 underline-offset-2 hover:underline',
+      title: 'Renseigner le nom de l\'entreprise (e)',
+      onClick: (e) => {
+        e.stopPropagation();
+        void renameCompanyPrompt(job);
+      },
+    }, '✎ Renseigner') : null,
+  );
+  const jobCell = el('td', { class: 'px-3 py-3' },
+    el('div', { class: 'flex flex-col' },
+      companyLine,
+      el('span', { class: 'text-xs text-zinc-500' }, job.job_title),
+    ),
+  );
+  if (job.source_url) {
+    const link = el('a', {
+      href: job.source_url, target: '_blank', rel: 'noopener noreferrer',
+      class: 'mt-0.5 inline-flex items-center gap-1 text-xs text-blue-600 hover:underline',
+      html: 'Voir l\'offre <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>',
+    });
+    link.addEventListener('click', (e) => e.stopPropagation());
+    jobCell.firstChild.appendChild(link);
+  }
+  tr.appendChild(jobCell);
+
+  // Dép.
+  tr.appendChild(el('td', { class: 'whitespace-nowrap px-3 py-3 text-zinc-600' }, job.departement ?? '—'));
+
+  // Métier
+  tr.appendChild(el('td', { class: 'px-3 py-3 text-zinc-600' },
+    el('div', { class: 'flex flex-col' },
+      el('span', {}, job.rome_label ?? '—'),
+      job.sector ? el('span', { class: 'text-xs text-zinc-400' }, job.sector) : null,
+    ),
+  ));
+
+  // Statut
+  const statusBadge = job.status === 'new'
+    ? el('span', { class: 'inline-flex items-center gap-1 rounded-full bg-blue-50 px-2 py-0.5 text-xs font-medium text-blue-700 ring-1 ring-inset ring-blue-100' },
+        el('span', { class: 'h-1.5 w-1.5 rounded-full bg-blue-500' }),
+        'À prospecter',
+      )
+    : el('span', { class: 'inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700 ring-1 ring-inset ring-emerald-100' },
+        el('span', { class: 'h-1.5 w-1.5 rounded-full bg-emerald-500' }),
+        'Prospecté',
+      );
+  tr.appendChild(el('td', { class: 'px-3 py-3' }, statusBadge));
+
+  // Contact
+  const contactParts = [job.contact_name, job.contact_email, job.contact_phone].filter(Boolean);
+  tr.appendChild(el('td', { class: 'px-3 py-3 text-xs text-zinc-600' },
+    contactParts.length ? el('span', { class: 'whitespace-pre-line' }, contactParts.join('\n')) : el('span', { class: 'text-zinc-300' }, '—'),
+  ));
+
+  // Actions
+  const deleteBtn = el('button', {
+    type: 'button',
+    class: 'inline-flex items-center rounded-lg border border-red-200 bg-white px-3 py-1.5 text-xs font-medium text-red-700 shadow-sm transition hover:bg-red-50',
+    title: 'Supprimer (d)',
+    onClick: (e) => {
+      e.stopPropagation();
+      deleteWithUndo(job);
+    },
+  }, 'Supprimer');
+  const actionBtn = el('button', {
+    type: 'button',
+    class: job.status === 'prospected'
+      ? 'inline-flex items-center rounded-lg border border-zinc-200 bg-white px-3 py-1.5 text-xs font-medium text-zinc-700 shadow-sm transition hover:bg-zinc-50'
+      : 'inline-flex items-center rounded-lg bg-zinc-900 px-3 py-1.5 text-xs font-medium text-white shadow-sm transition hover:bg-zinc-700',
+    title: job.status === 'prospected' ? 'Éditer (p)' : 'Prospecter (p)',
+    onClick: (e) => {
+      e.stopPropagation();
+      openProspectDialog(job);
+    },
+  }, job.status === 'prospected' ? 'Éditer' : 'Prospecter');
+  tr.appendChild(el('td', { class: 'px-3 py-3 pr-6 text-right' },
+    el('div', { class: 'inline-flex items-center gap-2' }, deleteBtn, actionBtn),
+  ));
+
+  return tr;
+}
+
+// ============================================================================
+// Construction d'une ligne d'entreprise (vue groupée, onglet Prospectés)
+// ============================================================================
+
+function buildAccountGroupRow(account, jobs) {
+  const expanded = expandedAccounts.has(account.id);
+  const latestProspectedAt = jobs
+    .map((j) => j.prospected_at)
+    .filter(Boolean)
+    .sort()
+    .pop();
+  const contactSet = new Set();
+  for (const j of jobs) {
+    [j.contact_name, j.contact_email, j.contact_phone]
+      .filter(Boolean)
+      .forEach((c) => contactSet.add(c));
+  }
+  const isUnknownCompany = account.company_name === 'Non communiqué';
+
+  const tr = el('tr', {
+    class: 'border-b border-zinc-100 bg-white transition hover:bg-zinc-50 cursor-pointer',
+  });
+  tr.addEventListener('click', (e) => {
+    if (e.target.closest('button, a, input')) return;
+    if (expanded) expandedAccounts.delete(account.id);
+    else expandedAccounts.add(account.id);
+    render();
+  });
+
+  // Toggle (utilise la cellule "Date")
+  tr.appendChild(el('td', { class: 'px-6 py-4 text-zinc-400' },
+    el('span', { class: 'inline-block w-3 text-sm' }, expanded ? '▼' : '▶'),
+  ));
+
+  // Source (vide ici, on n'affiche que la badge dans la colonne 6)
+  tr.appendChild(el('td', { class: 'px-3 py-4' }));
+
+  // Entreprise + count (colspan 3 : remplit Entreprise + Dép. + Métier)
+  tr.appendChild(el('td', { class: 'px-3 py-4', colspan: 3 },
+    el('div', { class: 'flex flex-wrap items-baseline gap-x-3 gap-y-1' },
+      el('span', {
+        class: isUnknownCompany
+          ? 'text-base font-semibold italic text-zinc-400'
+          : 'text-base font-semibold text-zinc-900',
+      }, account.company_name),
+      el('span', { class: 'text-xs text-zinc-500' },
+        `${jobs.length} poste${jobs.length > 1 ? 's' : ''} prospecté${jobs.length > 1 ? 's' : ''}`,
+      ),
+      latestProspectedAt
+        ? el('span', { class: 'text-xs text-zinc-400' }, `Dernier : ${formatDate(latestProspectedAt)}`)
+        : null,
+      isUnknownCompany ? el('button', {
+        type: 'button',
+        class: 'text-xs text-blue-600 underline-offset-2 hover:underline',
+        title: 'Renseigner le nom de l\'entreprise',
+        onClick: (e) => {
+          e.stopPropagation();
+          void renameCompanyPrompt(jobs[0]);
+        },
+      }, '✎ Renseigner') : null,
+    ),
+  ));
+
+  // Statut (toujours Prospecté ici)
+  tr.appendChild(el('td', { class: 'px-3 py-4' },
+    el('span', { class: 'inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700 ring-1 ring-inset ring-emerald-100' },
+      el('span', { class: 'h-1.5 w-1.5 rounded-full bg-emerald-500' }),
+      'Prospecté',
+    ),
+  ));
+
+  // Contact agrégé (max 3 lignes)
+  tr.appendChild(el('td', { class: 'px-3 py-4 text-xs text-zinc-600' },
+    contactSet.size
+      ? el('span', { class: 'whitespace-pre-line' }, Array.from(contactSet).slice(0, 3).join('\n'))
+      : el('span', { class: 'text-zinc-300' }, '—'),
+  ));
+
+  // Actions (vide pour l'instant — actions au niveau job dans la vue dépliée)
+  tr.appendChild(el('td', { class: 'px-3 py-4 pr-6 text-right text-xs text-zinc-400' },
+    expanded ? 'Replier' : 'Voir postes',
+  ));
+
+  return tr;
+}
+
+// ============================================================================
+// renderTable : route entre vue groupée (Prospectés) et vue plate (autres)
+// ============================================================================
+
 function renderTable() {
   const container = document.getElementById('table-container');
   container.innerHTML = '';
-  const jobs = filterJobs(store.jobs, currentFilters);
 
-  if (jobs.length === 0) {
+  // On exclut les jobs en suspens de suppression (toast Annuler en cours).
+  const allFiltered = filterJobs(store.jobs, currentFilters)
+    .filter((j) => !pendingDeletions.has(j.id));
+
+  if (allFiltered.length === 0) {
+    visibleJobsCache = [];
     container.appendChild(el('div', { class: 'flex flex-col items-center justify-center gap-3 px-6 py-16 text-center' },
       el('div', { class: 'flex h-16 w-16 items-center justify-center rounded-full bg-zinc-100 text-zinc-400', html: '<svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>' }),
       el('p', { class: 'text-sm font-medium text-zinc-700' }, 'Aucune offre à afficher'),
@@ -534,109 +912,77 @@ function renderTable() {
 
   const wrapper = el('div', { class: 'overflow-x-auto' });
   const table = el('table', { class: 'min-w-full text-sm' });
-  const thead = el('thead', {}, el('tr', { class: 'border-b border-zinc-100 bg-zinc-50/50 text-left text-xs uppercase tracking-wider text-zinc-500' },
-    ...['Date','Source','Entreprise · Poste','Dép.','Métier','Statut','Contact',''].map((h) => el('th', { class: 'px-3 py-3 font-medium first:pl-6 last:pr-6' }, h))
-  ));
   const tbody = el('tbody', {});
 
-  for (const job of jobs) {
-    const tr = el('tr', { class: 'border-b border-zinc-50 transition hover:bg-zinc-50/50' });
+  const isProspectedView = currentFilters.status === 'prospected';
+  const showCheckbox = !isProspectedView; // multi-select sur À prospecter et Toutes
 
-    tr.appendChild(el('td', { class: 'whitespace-nowrap px-6 py-3 text-zinc-600' }, formatDate(job.posted_at)));
-    tr.appendChild(el('td', { class: 'px-3 py-3' },
-      el('span', { class: 'inline-flex rounded-md bg-zinc-100 px-2 py-0.5 text-xs font-medium text-zinc-700' }, 'France Travail'),
-    ));
-    const isUnknownCompany = job.company_name === 'Non communiqué';
-    const companyLine = el('div', { class: 'flex items-center gap-2' },
-      el('span', {
-        class: isUnknownCompany ? 'font-medium italic text-zinc-400' : 'font-medium text-zinc-900',
-      }, job.company_name),
-      isUnknownCompany ? el('button', {
-        type: 'button',
-        class: 'text-xs text-blue-600 underline-offset-2 hover:underline',
-        title: 'Renseigner le nom de l\'entreprise',
-        onClick: async () => {
-          const entered = window.prompt('Nom de l\'entreprise :', '');
-          if (entered === null) return;
-          const trimmed = entered.trim();
-          if (trimmed === '' || trimmed === 'Non communiqué') return;
-          try {
-            const newStore = await patchLead(job.id, { company_name: trimmed });
-            applyNewStore(newStore);
-          } catch (err) {
-            showToast(err.message ?? String(err), 'error');
-          }
-        },
-      }, '✎ Renseigner') : null,
-    );
-    const jobCell = el('td', { class: 'px-3 py-3' },
-      el('div', { class: 'flex flex-col' },
-        companyLine,
-        el('span', { class: 'text-xs text-zinc-500' }, job.job_title),
-      ),
-    );
-    if (job.source_url) {
-      jobCell.firstChild.appendChild(el('a', {
-        href: job.source_url, target: '_blank', rel: 'noopener noreferrer',
-        class: 'mt-0.5 inline-flex items-center gap-1 text-xs text-blue-600 hover:underline',
-        html: 'Voir l\'offre <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>',
-      }));
+  // === En-tête ===
+  const headerCells = [];
+  if (showCheckbox) {
+    const checkAll = el('input', {
+      type: 'checkbox',
+      class: 'h-4 w-4 cursor-pointer rounded border-zinc-300',
+      'aria-label': 'Tout sélectionner',
+    });
+    const allSelected = allFiltered.length > 0 && allFiltered.every((j) => selectedJobIds.has(j.id));
+    checkAll.checked = allSelected;
+    checkAll.indeterminate = !allSelected && allFiltered.some((j) => selectedJobIds.has(j.id));
+    checkAll.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (checkAll.checked) {
+        for (const j of allFiltered) selectedJobIds.add(j.id);
+      } else {
+        for (const j of allFiltered) selectedJobIds.delete(j.id);
+      }
+      render();
+    });
+    headerCells.push(el('th', { class: 'px-3 py-3 first:pl-6' }, checkAll));
+  }
+  for (const h of ['Date', 'Source', 'Entreprise · Poste', 'Dép.', 'Métier', 'Statut', 'Contact', '']) {
+    headerCells.push(el('th', { class: 'px-3 py-3 font-medium first:pl-6 last:pr-6' }, h));
+  }
+  table.appendChild(el('thead', {},
+    el('tr', { class: 'border-b border-zinc-100 bg-zinc-50/50 text-left text-xs uppercase tracking-wider text-zinc-500' }, ...headerCells),
+  ));
+
+  // === Corps ===
+  if (isProspectedView) {
+    // Groupement par account_id
+    const groups = new Map();
+    for (const job of allFiltered) {
+      const k = job.account_id;
+      if (!groups.has(k)) groups.set(k, []);
+      groups.get(k).push(job);
     }
-    tr.appendChild(jobCell);
-    tr.appendChild(el('td', { class: 'whitespace-nowrap px-3 py-3 text-zinc-600' }, job.departement ?? '—'));
-    tr.appendChild(el('td', { class: 'px-3 py-3 text-zinc-600' },
-      el('div', { class: 'flex flex-col' },
-        el('span', {}, job.rome_label ?? '—'),
-        job.sector ? el('span', { class: 'text-xs text-zinc-400' }, job.sector) : null,
-      ),
-    ));
-
-    const statusBadge = job.status === 'new'
-      ? el('span', { class: 'inline-flex items-center gap-1 rounded-full bg-blue-50 px-2 py-0.5 text-xs font-medium text-blue-700 ring-1 ring-inset ring-blue-100' },
-          el('span', { class: 'h-1.5 w-1.5 rounded-full bg-blue-500' }),
-          'À prospecter',
-        )
-      : el('span', { class: 'inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700 ring-1 ring-inset ring-emerald-100' },
-          el('span', { class: 'h-1.5 w-1.5 rounded-full bg-emerald-500' }),
-          'Prospecté',
-        );
-    tr.appendChild(el('td', { class: 'px-3 py-3' }, statusBadge));
-
-    const contactParts = [job.contact_name, job.contact_email, job.contact_phone].filter(Boolean);
-    tr.appendChild(el('td', { class: 'px-3 py-3 text-xs text-zinc-600' },
-      contactParts.length ? el('span', { class: 'whitespace-pre-line' }, contactParts.join('\n')) : el('span', { class: 'text-zinc-300' }, '—'),
-    ));
-
-    const deleteBtn = el('button', {
-      type: 'button',
-      class: 'inline-flex items-center rounded-lg border border-red-200 bg-white px-3 py-1.5 text-xs font-medium text-red-700 shadow-sm transition hover:bg-red-50',
-      title: 'Supprimer cette offre',
-      onClick: async () => {
-        if (!window.confirm(`Supprimer cette offre ?\n\n${job.company_name} · ${job.job_title}`)) return;
-        try {
-          const newStore = await deleteLead(job.id);
-          applyNewStore(newStore);
-        } catch (err) {
-          showToast(err.message ?? String(err), 'error');
+    // Tri : dernier prospected_at d'abord (groupes les plus récents en haut)
+    const sortedAccountIds = Array.from(groups.keys()).sort((a, b) => {
+      const lastA = groups.get(a).map((j) => j.prospected_at).filter(Boolean).sort().pop() ?? '';
+      const lastB = groups.get(b).map((j) => j.prospected_at).filter(Boolean).sort().pop() ?? '';
+      return lastB.localeCompare(lastA);
+    });
+    // Cache pour la nav clavier : on inclut tous les jobs visibles dans l'ordre d'affichage
+    visibleJobsCache = [];
+    for (const accountId of sortedAccountIds) {
+      const jobs = groups.get(accountId);
+      // Account "fantôme" si jamais l'account n'est pas dans store.accounts (rare)
+      const account = store.accounts.find((a) => a.id === accountId)
+        ?? { id: accountId, company_name: jobs[0].company_name };
+      tbody.appendChild(buildAccountGroupRow(account, jobs));
+      if (expandedAccounts.has(accountId)) {
+        for (const job of jobs) {
+          tbody.appendChild(buildJobRow(job, { showCheckbox: false, indented: true }));
+          visibleJobsCache.push(job);
         }
-      },
-    }, 'Supprimer');
-
-    const actionBtn = el('button', {
-      type: 'button',
-      class: job.status === 'prospected'
-        ? 'inline-flex items-center rounded-lg border border-zinc-200 bg-white px-3 py-1.5 text-xs font-medium text-zinc-700 shadow-sm transition hover:bg-zinc-50'
-        : 'inline-flex items-center rounded-lg bg-zinc-900 px-3 py-1.5 text-xs font-medium text-white shadow-sm transition hover:bg-zinc-700',
-      onClick: () => openProspectDialog(job),
-    }, job.status === 'prospected' ? 'Éditer' : 'Prospecter');
-    tr.appendChild(el('td', { class: 'px-3 py-3 pr-6 text-right' },
-      el('div', { class: 'inline-flex items-center gap-2' }, deleteBtn, actionBtn),
-    ));
-
-    tbody.appendChild(tr);
+      }
+    }
+  } else {
+    visibleJobsCache = allFiltered.slice();
+    for (const job of allFiltered) {
+      tbody.appendChild(buildJobRow(job, { showCheckbox: true, indented: false }));
+    }
   }
 
-  table.appendChild(thead);
   table.appendChild(tbody);
   wrapper.appendChild(table);
   container.appendChild(wrapper);
@@ -655,6 +1001,114 @@ function renderActions() {
   document.getElementById('btn-export').disabled = jobs.length === 0;
 }
 
+// Suppression en lot avec annulation 5s (un seul toast pour tout le lot).
+function bulkDeleteWithUndo(jobs) {
+  if (jobs.length === 0) return;
+  const ids = jobs.map((j) => j.id);
+  for (const j of jobs) {
+    if (!pendingDeletions.has(j.id)) {
+      pendingDeletions.set(j.id, { job: j, handle: null });
+    }
+  }
+  selectedJobIds.clear();
+
+  const handle = showUndoToast(
+    `${jobs.length} offre${jobs.length > 1 ? 's' : ''} supprimée${jobs.length > 1 ? 's' : ''}`,
+    async () => {
+      for (const id of ids) pendingDeletions.delete(id);
+      // On enchaîne les DELETEs en série pour éviter les écritures KV concurrentes.
+      let lastStore = null;
+      let failures = [];
+      for (const id of ids) {
+        try {
+          lastStore = await deleteLead(id);
+        } catch (err) {
+          failures.push({ id, err });
+        }
+      }
+      if (lastStore) applyNewStore(lastStore);
+      if (failures.length) {
+        showToast(`Échec sur ${failures.length} suppression${failures.length > 1 ? 's' : ''} : ${failures[0].err.message ?? failures[0].err}`, 'error');
+      }
+    },
+    () => {
+      for (const id of ids) pendingDeletions.delete(id);
+      render();
+    },
+  );
+  // On stocke la même handle pour chaque pending afin que le focus ne s'y bloque pas
+  for (const id of ids) {
+    const p = pendingDeletions.get(id);
+    if (p) p.handle = handle;
+  }
+  if (focusedJobId && ids.includes(focusedJobId)) focusedJobId = null;
+  render();
+}
+
+async function bulkMarkProspected(jobs) {
+  const ids = jobs.filter((j) => j.status === 'new').map((j) => j.id);
+  if (ids.length === 0) {
+    showToast('Aucune offre "À prospecter" dans la sélection.', 'info');
+    return;
+  }
+  try {
+    const newStore = await markAllProspectedIds(ids);
+    selectedJobIds.clear();
+    showToast(`${ids.length} offre(s) basculée(s) en prospected.`, 'info');
+    applyNewStore(newStore);
+  } catch (err) {
+    showToast(err.message ?? String(err), 'error');
+  }
+}
+
+function renderBulkBar() {
+  const bar = document.getElementById('bulk-bar');
+  bar.innerHTML = '';
+  // Pas de barre dans la vue Prospectés (groupée par entreprise) : la sélection
+  // multi y est désactivée (pas de checkbox) donc elle est forcément vide.
+  if (currentFilters.status === 'prospected') return;
+  if (selectedJobIds.size === 0) return;
+
+  // Récupère les jobs sélectionnés (filtre les pending pour cohérence).
+  const selected = Array.from(selectedJobIds)
+    .map((id) => store.jobs.find((j) => j.id === id))
+    .filter((j) => j && !pendingDeletions.has(j.id));
+  if (selected.length === 0) return;
+
+  const newCount = selected.filter((j) => j.status === 'new').length;
+
+  const container = el('div', {
+    class: 'flex flex-wrap items-center justify-between gap-3 border-b border-zinc-100 bg-amber-50/40 px-6 py-3 text-sm',
+  });
+  container.appendChild(el('div', { class: 'flex items-center gap-3' },
+    el('span', { class: 'font-medium text-zinc-900' }, `${selected.length} sélectionnée${selected.length > 1 ? 's' : ''}`),
+    el('button', {
+      type: 'button',
+      class: 'text-xs text-zinc-500 underline-offset-2 hover:text-zinc-900 hover:underline',
+      onClick: () => {
+        selectedJobIds.clear();
+        lastClickedJobId = null;
+        render();
+      },
+    }, 'Désélectionner'),
+  ));
+  const actions = el('div', { class: 'flex items-center gap-2' });
+  if (newCount > 0) {
+    actions.appendChild(el('button', {
+      type: 'button',
+      class: 'inline-flex items-center gap-1.5 rounded-lg border border-zinc-300 bg-white px-3 py-1.5 text-xs font-medium text-zinc-700 shadow-sm transition hover:bg-zinc-50',
+      onClick: () => void bulkMarkProspected(selected),
+    }, `Marquer prospectées (${newCount})`));
+  }
+  actions.appendChild(el('button', {
+    type: 'button',
+    class: 'inline-flex items-center gap-1.5 rounded-lg border border-red-200 bg-white px-3 py-1.5 text-xs font-medium text-red-700 shadow-sm transition hover:bg-red-50',
+    onClick: () => bulkDeleteWithUndo(selected),
+  }, `Supprimer (${selected.length})`));
+  container.appendChild(actions);
+  bar.appendChild(container);
+}
+
 function renderFooter() {
   const f = document.getElementById('footer');
   f.innerHTML = '';
@@ -667,6 +1121,7 @@ function render() {
   renderStats();
   renderTabs();
   renderFilters();
+  renderBulkBar();
   renderTable();
   renderActions();
   renderFooter();
@@ -715,6 +1170,116 @@ document.getElementById('btn-export').addEventListener('click', downloadCsv);
 window.addEventListener('popstate', () => {
   currentFilters = readFiltersFromUrl();
   render();
+});
+
+// ============================================================================
+// Raccourcis clavier
+// ============================================================================
+//
+// j / ↓     : focus la ligne suivante
+// k / ↑     : focus la ligne précédente
+// p         : prospecter / éditer la ligne focus
+// d         : supprimer la ligne focus (avec annulation 5s)
+// e         : renseigner le nom (si entreprise = "Non communiqué")
+// x         : (dé)cocher la sélection multi sur la ligne focus
+// Échap     : retire le focus + désélectionne tout
+// ?         : aide
+
+function showShortcutsHelp() {
+  const lines = [
+    'Raccourcis clavier :',
+    '',
+    '  j / ↓     ligne suivante',
+    '  k / ↑     ligne précédente',
+    '  p         prospecter / éditer',
+    '  d         supprimer (annulable 5s)',
+    '  e         renseigner le nom (si Non communiqué)',
+    '  x         (dé)cocher la ligne pour sélection multi',
+    '  Échap     retire le focus + désélectionne',
+    '  ?         affiche cette aide',
+  ];
+  window.alert(lines.join('\n'));
+}
+
+function moveFocus(delta) {
+  if (visibleJobsCache.length === 0) return;
+  const idx = focusedJobId
+    ? visibleJobsCache.findIndex((j) => j.id === focusedJobId)
+    : -1;
+  let next;
+  if (idx === -1) {
+    next = delta > 0 ? visibleJobsCache[0] : visibleJobsCache[visibleJobsCache.length - 1];
+  } else {
+    const i = Math.max(0, Math.min(visibleJobsCache.length - 1, idx + delta));
+    next = visibleJobsCache[i];
+  }
+  if (!next) return;
+  focusedJobId = next.id;
+  render();
+  // Scroll la ligne dans la vue
+  const tr = document.querySelector(`tr[data-job-id="${CSS.escape(next.id)}"]`);
+  tr?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+}
+
+function focusedJob() {
+  if (!focusedJobId) return null;
+  return visibleJobsCache.find((j) => j.id === focusedJobId) ?? null;
+}
+
+document.addEventListener('keydown', (e) => {
+  // Skip si modifier (Ctrl/Cmd/Alt) ou champ texte focus.
+  if (e.ctrlKey || e.metaKey || e.altKey) return;
+  const tag = (e.target && e.target.tagName) || '';
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+  if (document.getElementById('prospect-dialog')?.open) return;
+
+  const k = e.key;
+  if (k === 'j' || k === 'ArrowDown') {
+    e.preventDefault();
+    moveFocus(1);
+    return;
+  }
+  if (k === 'k' || k === 'ArrowUp') {
+    e.preventDefault();
+    moveFocus(-1);
+    return;
+  }
+  if (k === 'Escape') {
+    if (focusedJobId || selectedJobIds.size > 0) {
+      focusedJobId = null;
+      selectedJobIds.clear();
+      lastClickedJobId = null;
+      render();
+    }
+    return;
+  }
+  if (k === '?') {
+    e.preventDefault();
+    showShortcutsHelp();
+    return;
+  }
+
+  const job = focusedJob();
+  if (!job) return;
+
+  if (k === 'p') {
+    e.preventDefault();
+    openProspectDialog(job);
+  } else if (k === 'd') {
+    e.preventDefault();
+    deleteWithUndo(job);
+  } else if (k === 'e') {
+    if (job.company_name === 'Non communiqué') {
+      e.preventDefault();
+      void renameCompanyPrompt(job);
+    }
+  } else if (k === 'x') {
+    e.preventDefault();
+    if (selectedJobIds.has(job.id)) selectedJobIds.delete(job.id);
+    else selectedJobIds.add(job.id);
+    lastClickedJobId = job.id;
+    render();
+  }
 });
 
 // ============================================================================
