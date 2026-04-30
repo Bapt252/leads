@@ -193,6 +193,12 @@ async function patchLead(id, patch) {
   });
 }
 
+async function deleteLead(id) {
+  await workerFetch(`/leads/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+  });
+}
+
 async function markAllProspectedIds(ids) {
   if (ids.length === 0) return;
   await workerFetch('/leads/mark-all-prospected', {
@@ -523,9 +529,32 @@ function renderTable() {
     tr.appendChild(el('td', { class: 'px-3 py-3' },
       el('span', { class: 'inline-flex rounded-md bg-zinc-100 px-2 py-0.5 text-xs font-medium text-zinc-700' }, 'France Travail'),
     ));
+    const isUnknownCompany = job.company_name === 'Non communiqué';
+    const companyLine = el('div', { class: 'flex items-center gap-2' },
+      el('span', {
+        class: isUnknownCompany ? 'font-medium italic text-zinc-400' : 'font-medium text-zinc-900',
+      }, job.company_name),
+      isUnknownCompany ? el('button', {
+        type: 'button',
+        class: 'text-xs text-blue-600 underline-offset-2 hover:underline',
+        title: 'Renseigner le nom de l\'entreprise',
+        onClick: async () => {
+          const entered = window.prompt('Nom de l\'entreprise :', '');
+          if (entered === null) return;
+          const trimmed = entered.trim();
+          if (trimmed === '' || trimmed === 'Non communiqué') return;
+          try {
+            await patchLead(job.id, { company_name: trimmed });
+            await reload();
+          } catch (err) {
+            showToast(err.message ?? String(err), 'error');
+          }
+        },
+      }, '✎ Renseigner') : null,
+    );
     const jobCell = el('td', { class: 'px-3 py-3' },
       el('div', { class: 'flex flex-col' },
-        el('span', { class: 'font-medium text-zinc-900' }, job.company_name),
+        companyLine,
         el('span', { class: 'text-xs text-zinc-500' }, job.job_title),
       ),
     );
@@ -561,6 +590,21 @@ function renderTable() {
       contactParts.length ? el('span', { class: 'whitespace-pre-line' }, contactParts.join('\n')) : el('span', { class: 'text-zinc-300' }, '—'),
     ));
 
+    const deleteBtn = el('button', {
+      type: 'button',
+      class: 'inline-flex items-center rounded-lg border border-red-200 bg-white px-3 py-1.5 text-xs font-medium text-red-700 shadow-sm transition hover:bg-red-50',
+      title: 'Supprimer cette offre',
+      onClick: async () => {
+        if (!window.confirm(`Supprimer cette offre ?\n\n${job.company_name} · ${job.job_title}`)) return;
+        try {
+          await deleteLead(job.id);
+          await reload();
+        } catch (err) {
+          showToast(err.message ?? String(err), 'error');
+        }
+      },
+    }, 'Supprimer');
+
     const actionBtn = el('button', {
       type: 'button',
       class: job.status === 'prospected'
@@ -568,7 +612,9 @@ function renderTable() {
         : 'inline-flex items-center rounded-lg bg-zinc-900 px-3 py-1.5 text-xs font-medium text-white shadow-sm transition hover:bg-zinc-700',
       onClick: () => openProspectDialog(job),
     }, job.status === 'prospected' ? 'Éditer' : 'Prospecter');
-    tr.appendChild(el('td', { class: 'px-3 py-3 pr-6 text-right' }, actionBtn));
+    tr.appendChild(el('td', { class: 'px-3 py-3 pr-6 text-right' },
+      el('div', { class: 'inline-flex items-center gap-2' }, deleteBtn, actionBtn),
+    ));
 
     tbody.appendChild(tr);
   }

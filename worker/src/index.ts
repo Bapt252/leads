@@ -1,8 +1,9 @@
 // Worker Cloudflare multi-endpoints :
-//   - GET   /offres                         : proxy vers l'API France Travail
-//   - PATCH /leads/:id                      : modifie un lead dans leads.json (via API GitHub)
-//   - POST  /leads/mark-all-prospected      : bascule en masse plusieurs leads en 'prospected'
-//   - POST  /ingest/france-travail          : déclenche le workflow GitHub Actions d'ingestion
+//   - GET    /offres                        : proxy vers l'API France Travail
+//   - PATCH  /leads/:id                     : modifie un lead dans leads.json (via API GitHub)
+//   - DELETE /leads/:id                     : supprime un lead de leads.json
+//   - POST   /leads/mark-all-prospected     : bascule en masse plusieurs leads en 'prospected'
+//   - POST   /ingest/france-travail         : déclenche le workflow GitHub Actions d'ingestion
 //
 // Authentification : secret partagé dans le header X-API-Key (vs SHARED_API_KEY).
 // Les credentials France Travail + le token GitHub sont des secrets Cloudflare.
@@ -204,6 +205,9 @@ interface LeadsStore {
 
 interface LeadPatch {
   status?: JobStatus;
+  // Permet de renseigner manuellement une entreprise quand France Travail
+  // l'a masquée ("Non communiqué"). Doit être non-vide ; null interdit.
+  company_name?: string;
   contact_name?: string | null;
   contact_email?: string | null;
   contact_phone?: string | null;
@@ -337,6 +341,12 @@ function parsePatch(body: unknown): LeadPatch | null {
     if (b.status !== 'new' && b.status !== 'prospected') return null;
     patch.status = b.status;
   }
+  if (b.company_name !== undefined) {
+    if (typeof b.company_name !== 'string') return null;
+    const t = b.company_name.trim();
+    if (t === '') return null;
+    patch.company_name = t;
+  }
   for (const key of ['contact_name', 'contact_email', 'contact_phone', 'notes'] as const) {
     if (b[key] !== undefined) {
       const v = normStr(b[key]);
@@ -347,12 +357,37 @@ function parsePatch(body: unknown): LeadPatch | null {
   return patch;
 }
 
-function applyPatch(job: Job, patch: LeadPatch): void {
+function applyPatch(store: LeadsStore, job: Job, patch: LeadPatch): void {
   if (patch.status !== undefined) {
     job.status = patch.status;
     // prospected_at figé à la première bascule (idempotent ensuite).
     if (patch.status === 'prospected' && !job.prospected_at) {
       job.prospected_at = new Date().toISOString();
+    }
+  }
+  if (patch.company_name !== undefined && patch.company_name !== job.company_name) {
+    job.company_name = patch.company_name;
+    // Re-dérive account_id pour rester cohérent avec la dédup côté Next.js,
+    // et crée le compte s'il n'existe pas déjà.
+    const newAccountId = accountIdFor(patch.company_name);
+    job.account_id = newAccountId;
+    if (!store.accounts.find((a) => a.id === newAccountId)) {
+      const now = new Date().toISOString();
+      store.accounts.push({
+        id: newAccountId,
+        company_name: patch.company_name,
+        stage: 'nouveau',
+        contact_name: null,
+        contact_email: null,
+        contact_phone: null,
+        notes: null,
+        last_contact_at: null,
+        next_action: null,
+        next_action_at: null,
+        activity: [],
+        created_at: now,
+        updated_at: now,
+      });
     }
   }
   if (patch.contact_name !== undefined) job.contact_name = patch.contact_name;
@@ -398,7 +433,18 @@ async function handlePatchLead(
     if (!job) {
       return { ok: false, response: new Response('Lead not found', { status: 404 }) };
     }
-    applyPatch(job, patch);
+    applyPatch(store, job, patch);
+    return { ok: true };
+  });
+}
+
+async function handleDeleteLead(env: Env, leadId: string): Promise<Response> {
+  return mutateLeads(env, `chore(leads): suppr ${leadId}`, (store) => {
+    const idx = store.jobs.findIndex((j) => j.id === leadId);
+    if (idx === -1) {
+      return { ok: false, response: new Response('Lead not found', { status: 404 }) };
+    }
+    store.jobs.splice(idx, 1);
     return { ok: true };
   });
 }
@@ -466,7 +512,7 @@ async function handleDebugGithub(env: Env): Promise<Response> {
 // et ce Worker est lui-même destiné à être appelé depuis un front public.
 const CORS_HEADERS: Record<string, string> = {
   'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Methods': 'GET, POST, PATCH, OPTIONS',
+  'Access-Control-Allow-Methods': 'GET, POST, PATCH, DELETE, OPTIONS',
   'Access-Control-Allow-Headers': 'Content-Type, X-API-Key',
   'Access-Control-Max-Age': '86400',
 };
@@ -522,9 +568,16 @@ export default {
       }
 
       // PATCH /leads/:id — modifie un lead.
+      // DELETE /leads/:id — supprime un lead.
       const match = path.match(/^\/leads\/(.+)$/);
-      if (method === 'PATCH' && match) {
-        return withCors(await handlePatchLead(req, env, decodeURIComponent(match[1])));
+      if (match) {
+        const leadId = decodeURIComponent(match[1]);
+        if (method === 'PATCH') {
+          return withCors(await handlePatchLead(req, env, leadId));
+        }
+        if (method === 'DELETE') {
+          return withCors(await handleDeleteLead(env, leadId));
+        }
       }
 
       return withCors(new Response('Not found', { status: 404 }));
