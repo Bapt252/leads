@@ -138,6 +138,16 @@ type AccountStage =
   | 'gagne'
   | 'perdu';
 
+const ACCOUNT_STAGES: readonly AccountStage[] = [
+  'nouveau',
+  'contacte',
+  'relance',
+  'rdv',
+  'qualifie',
+  'gagne',
+  'perdu',
+] as const;
+
 type ActivityKind = 'stage_change' | 'note' | 'contact' | 'system';
 
 interface ActivityEntry {
@@ -148,13 +158,25 @@ interface ActivityEntry {
   stage_to?: AccountStage;
 }
 
+// Contact rattaché à un compte. Plusieurs contacts par compte (ex: DRH + manager).
+// L'id est généré côté worker (uuid) lors de la création.
+interface AccountContact {
+  id: string;
+  name: string;
+  role: string | null;
+  email: string | null;
+  phone: string | null;
+  notes: string | null;
+}
+
 interface Account {
   id: string;
   company_name: string;
   stage: AccountStage;
-  contact_name: string | null;
-  contact_email: string | null;
-  contact_phone: string | null;
+  // Liste de contacts connus pour le compte (DRH, managers, recruteurs, ...).
+  // Distinct des contact_* au niveau Job (qui représente "à qui j'ai envoyé
+  // le cold mail pour CE poste précis").
+  contacts: AccountContact[];
   notes: string | null;
   last_contact_at: string | null;
   next_action: string | null;
@@ -274,6 +296,22 @@ function mapOffre(offre: FTOffre): SourceFields {
 // KV I/O.
 // ----------------------------------------------------------------------------
 
+function blankAccount(id: string, companyName: string, now: string): Account {
+  return {
+    id,
+    company_name: companyName,
+    stage: 'nouveau',
+    contacts: [],
+    notes: null,
+    last_contact_at: null,
+    next_action: null,
+    next_action_at: null,
+    activity: [],
+    created_at: now,
+    updated_at: now,
+  };
+}
+
 function emptyStore(): LeadsStore {
   return {
     version: 2,
@@ -284,15 +322,54 @@ function emptyStore(): LeadsStore {
   };
 }
 
+// Migre les comptes ayant le format antérieur (contact_name/email/phone à plat
+// au lieu de contacts[]). Utile car le user a déjà créé des accounts avant
+// cette refonte. Idempotent : ne touche rien si contacts[] déjà présent.
+function migrateAccount(a: unknown): Account {
+  const raw = a as Record<string, unknown>;
+  if (Array.isArray(raw.contacts)) return raw as unknown as Account;
+  const contacts: AccountContact[] = [];
+  const name = typeof raw.contact_name === 'string' ? raw.contact_name : null;
+  const email = typeof raw.contact_email === 'string' ? raw.contact_email : null;
+  const phone = typeof raw.contact_phone === 'string' ? raw.contact_phone : null;
+  if (name || email || phone) {
+    contacts.push({
+      id: cryptoId(),
+      name: name ?? '(sans nom)',
+      role: null,
+      email,
+      phone,
+      notes: null,
+    });
+  }
+  return {
+    id: String(raw.id),
+    company_name: String(raw.company_name ?? ''),
+    stage: (raw.stage as AccountStage) ?? 'nouveau',
+    contacts,
+    notes: typeof raw.notes === 'string' ? raw.notes : null,
+    last_contact_at: typeof raw.last_contact_at === 'string' ? raw.last_contact_at : null,
+    next_action: typeof raw.next_action === 'string' ? raw.next_action : null,
+    next_action_at: typeof raw.next_action_at === 'string' ? raw.next_action_at : null,
+    activity: Array.isArray(raw.activity) ? (raw.activity as ActivityEntry[]) : [],
+    created_at: typeof raw.created_at === 'string' ? raw.created_at : new Date().toISOString(),
+    updated_at: typeof raw.updated_at === 'string' ? raw.updated_at : new Date().toISOString(),
+  };
+}
+
+// UUID court basé sur crypto.randomUUID (disponible dans le runtime Workers).
+function cryptoId(): string {
+  return crypto.randomUUID();
+}
+
 async function getStore(env: Env): Promise<LeadsStore> {
   const raw = await env.LEADS_STORE.get(STORE_KEY);
   if (raw === null) return emptyStore();
   const parsed = JSON.parse(raw) as Partial<LeadsStore>;
-  // Garde-fou pour stores écrits avant l'ajout du champ tombstones.
   return {
     version: 2,
     updated_at: parsed.updated_at ?? new Date().toISOString(),
-    accounts: parsed.accounts ?? [],
+    accounts: (parsed.accounts ?? []).map(migrateAccount),
     jobs: parsed.jobs ?? [],
     tombstones: parsed.tombstones ?? [],
   };
@@ -367,21 +444,7 @@ function applyPatch(store: LeadsStore, job: Job, patch: LeadPatch): void {
     job.account_id = newAccountId;
     if (!store.accounts.find((a) => a.id === newAccountId)) {
       const now = new Date().toISOString();
-      store.accounts.push({
-        id: newAccountId,
-        company_name: patch.company_name,
-        stage: 'nouveau',
-        contact_name: null,
-        contact_email: null,
-        contact_phone: null,
-        notes: null,
-        last_contact_at: null,
-        next_action: null,
-        next_action_at: null,
-        activity: [],
-        created_at: now,
-        updated_at: now,
-      });
+      store.accounts.push(blankAccount(newAccountId, patch.company_name, now));
     }
   }
   if (patch.contact_name !== undefined) job.contact_name = patch.contact_name;
@@ -498,21 +561,7 @@ async function handleBulkUpsert(req: Request, env: Env): Promise<Response> {
     } else {
       const accountId = accountIdFor(source.company_name);
       if (!accountIds.has(accountId)) {
-        store.accounts.push({
-          id: accountId,
-          company_name: source.company_name,
-          stage: 'nouveau',
-          contact_name: null,
-          contact_email: null,
-          contact_phone: null,
-          notes: null,
-          last_contact_at: null,
-          next_action: null,
-          next_action_at: null,
-          activity: [],
-          created_at: now,
-          updated_at: now,
-        });
+        store.accounts.push(blankAccount(accountId, source.company_name, now));
         accountIds.add(accountId);
       }
       const job: Job = {
@@ -545,6 +594,191 @@ async function handleBulkUpsert(req: Request, env: Env): Promise<Response> {
 async function handleIngestFT(env: Env): Promise<Response> {
   await dispatchEnrich(env);
   return Response.json({ ok: true, message: 'Workflow enrich déclenché' });
+}
+
+// ----------------------------------------------------------------------------
+// Handlers Account (pipeline + contacts).
+// ----------------------------------------------------------------------------
+
+interface AccountPatchBody {
+  stage?: AccountStage;
+  next_action?: string | null;
+  next_action_at?: string | null;
+  notes?: string | null;
+  // Marque la dernière interaction (utilisé quand on coche "j'ai relancé").
+  last_contact_at?: string | null;
+}
+
+function parseAccountPatch(body: unknown): AccountPatchBody | null {
+  if (typeof body !== 'object' || body === null) return null;
+  const b = body as Record<string, unknown>;
+  const patch: AccountPatchBody = {};
+  if (b.stage !== undefined) {
+    if (typeof b.stage !== 'string' || !ACCOUNT_STAGES.includes(b.stage as AccountStage)) return null;
+    patch.stage = b.stage as AccountStage;
+  }
+  for (const key of ['next_action', 'next_action_at', 'notes', 'last_contact_at'] as const) {
+    if (b[key] !== undefined) {
+      const v = normStr(b[key]);
+      if (v === undefined) return null;
+      patch[key] = v;
+    }
+  }
+  return patch;
+}
+
+async function handlePatchAccount(
+  req: Request,
+  env: Env,
+  accountId: string,
+): Promise<Response> {
+  const body = await req.json().catch(() => null);
+  const patch = parseAccountPatch(body);
+  if (!patch) return new Response('Body invalide', { status: 400 });
+
+  return mutateStore(env, (store) => {
+    const account = store.accounts.find((a) => a.id === accountId);
+    if (!account) {
+      return { ok: false, response: new Response('Account not found', { status: 404 }) };
+    }
+    const now = new Date().toISOString();
+    // Auto-log activity sur changement d'étape.
+    if (patch.stage !== undefined && patch.stage !== account.stage) {
+      account.activity.push({
+        at: now,
+        kind: 'stage_change',
+        message: `${account.stage} → ${patch.stage}`,
+        stage_from: account.stage,
+        stage_to: patch.stage,
+      });
+      account.stage = patch.stage;
+    }
+    if (patch.next_action !== undefined) account.next_action = patch.next_action;
+    if (patch.next_action_at !== undefined) account.next_action_at = patch.next_action_at;
+    if (patch.last_contact_at !== undefined) account.last_contact_at = patch.last_contact_at;
+    if (patch.notes !== undefined && patch.notes !== account.notes) {
+      account.notes = patch.notes;
+      account.activity.push({ at: now, kind: 'note', message: 'Note mise à jour' });
+    }
+    account.updated_at = now;
+    return { ok: true };
+  });
+}
+
+interface ContactPayload {
+  name?: string;
+  role?: string | null;
+  email?: string | null;
+  phone?: string | null;
+  notes?: string | null;
+}
+
+function parseContact(body: unknown): ContactPayload | null {
+  if (typeof body !== 'object' || body === null) return null;
+  const b = body as Record<string, unknown>;
+  const out: ContactPayload = {};
+  if (b.name !== undefined) {
+    if (typeof b.name !== 'string') return null;
+    const t = b.name.trim();
+    if (t === '') return null;
+    out.name = t;
+  }
+  for (const key of ['role', 'email', 'phone', 'notes'] as const) {
+    if (b[key] !== undefined) {
+      const v = normStr(b[key]);
+      if (v === undefined) return null;
+      out[key] = v;
+    }
+  }
+  return out;
+}
+
+async function handleAddContact(
+  req: Request,
+  env: Env,
+  accountId: string,
+): Promise<Response> {
+  const body = await req.json().catch(() => null);
+  const data = parseContact(body);
+  if (!data || !data.name) {
+    return new Response('Body attendu : { name: string, role?, email?, phone?, notes? }', { status: 400 });
+  }
+  const name = data.name;
+  return mutateStore(env, (store) => {
+    const account = store.accounts.find((a) => a.id === accountId);
+    if (!account) {
+      return { ok: false, response: new Response('Account not found', { status: 404 }) };
+    }
+    const contact: AccountContact = {
+      id: cryptoId(),
+      name,
+      role: data.role ?? null,
+      email: data.email ?? null,
+      phone: data.phone ?? null,
+      notes: data.notes ?? null,
+    };
+    account.contacts.push(contact);
+    account.activity.push({
+      at: new Date().toISOString(),
+      kind: 'contact',
+      message: `Contact ajouté : ${contact.name}${contact.role ? ` (${contact.role})` : ''}`,
+    });
+    account.updated_at = new Date().toISOString();
+    return { ok: true };
+  });
+}
+
+async function handleUpdateContact(
+  req: Request,
+  env: Env,
+  accountId: string,
+  contactId: string,
+): Promise<Response> {
+  const body = await req.json().catch(() => null);
+  const data = parseContact(body);
+  if (!data) return new Response('Body invalide', { status: 400 });
+  return mutateStore(env, (store) => {
+    const account = store.accounts.find((a) => a.id === accountId);
+    if (!account) {
+      return { ok: false, response: new Response('Account not found', { status: 404 }) };
+    }
+    const contact = account.contacts.find((c) => c.id === contactId);
+    if (!contact) {
+      return { ok: false, response: new Response('Contact not found', { status: 404 }) };
+    }
+    if (data.name !== undefined) contact.name = data.name;
+    if (data.role !== undefined) contact.role = data.role;
+    if (data.email !== undefined) contact.email = data.email;
+    if (data.phone !== undefined) contact.phone = data.phone;
+    if (data.notes !== undefined) contact.notes = data.notes;
+    account.updated_at = new Date().toISOString();
+    return { ok: true };
+  });
+}
+
+async function handleDeleteContact(
+  env: Env,
+  accountId: string,
+  contactId: string,
+): Promise<Response> {
+  return mutateStore(env, (store) => {
+    const account = store.accounts.find((a) => a.id === accountId);
+    if (!account) {
+      return { ok: false, response: new Response('Account not found', { status: 404 }) };
+    }
+    const idx = account.contacts.findIndex((c) => c.id === contactId);
+    if (idx === -1) {
+      return { ok: false, response: new Response('Contact not found', { status: 404 }) };
+    }
+    const removed = account.contacts.splice(idx, 1)[0];
+    account.activity.push({
+      at: new Date().toISOString(),
+      kind: 'contact',
+      message: `Contact retiré : ${removed.name}`,
+    });
+    account.updated_at = new Date().toISOString();
+    return { ok: true };
+  });
 }
 
 // ----------------------------------------------------------------------------
@@ -633,14 +867,43 @@ export default {
         return withCors(await handleBulkUpsert(req, env));
       }
 
-      const match = path.match(/^\/leads\/(.+)$/);
-      if (match) {
-        const leadId = decodeURIComponent(match[1]);
+      const leadMatch = path.match(/^\/leads\/(.+)$/);
+      if (leadMatch) {
+        const leadId = decodeURIComponent(leadMatch[1]);
         if (method === 'PATCH') {
           return withCors(await handlePatchLead(req, env, leadId));
         }
         if (method === 'DELETE') {
           return withCors(await handleDeleteLead(env, leadId));
+        }
+      }
+
+      // /accounts/:id/contacts/:cid — sub-resource avant /accounts/:id
+      const contactMatch = path.match(/^\/accounts\/([^/]+)\/contacts\/([^/]+)$/);
+      if (contactMatch) {
+        const accountId = decodeURIComponent(contactMatch[1]);
+        const contactId = decodeURIComponent(contactMatch[2]);
+        if (method === 'PATCH') {
+          return withCors(await handleUpdateContact(req, env, accountId, contactId));
+        }
+        if (method === 'DELETE') {
+          return withCors(await handleDeleteContact(env, accountId, contactId));
+        }
+      }
+      // /accounts/:id/contacts — collection
+      const contactsMatch = path.match(/^\/accounts\/([^/]+)\/contacts$/);
+      if (contactsMatch) {
+        const accountId = decodeURIComponent(contactsMatch[1]);
+        if (method === 'POST') {
+          return withCors(await handleAddContact(req, env, accountId));
+        }
+      }
+      // /accounts/:id — patch
+      const accountMatch = path.match(/^\/accounts\/([^/]+)$/);
+      if (accountMatch) {
+        const accountId = decodeURIComponent(accountMatch[1]);
+        if (method === 'PATCH') {
+          return withCors(await handlePatchAccount(req, env, accountId));
         }
       }
 
