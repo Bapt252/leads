@@ -56,14 +56,32 @@
     /* Petites animations utilitaires */
     @keyframes fade-in { from { opacity: 0; transform: translateY(2px); } to { opacity: 1; transform: none; } }
     .anim-fade-in { animation: fade-in 0.18s ease-out; }
+    @keyframes slide-in-right {
+      from { transform: translateX(110%); opacity: 0; }
+      to   { transform: none;             opacity: 1; }
+    }
+    /* Toast container : flottant en bas à droite, ne pousse plus le contenu */
+    #toast-container {
+      position: fixed;
+      right: 1.5rem;
+      bottom: 1.5rem;
+      z-index: 50;
+      width: min(26rem, calc(100vw - 3rem));
+      pointer-events: none;
+    }
+    #toast-container > * {
+      animation: slide-in-right 0.22s cubic-bezier(0.16, 1, 0.3, 1) both;
+      pointer-events: auto;
+      margin-bottom: 0 !important;
+    }
     /* Lift léger au hover sur les cartes interactives */
     .card-hover { transition: transform 0.15s ease, box-shadow 0.15s ease; }
-    .card-hover:hover { transform: translateY(-1px); }
+    .card-hover:hover { transform: translateY(-1px); box-shadow: 0 2px 4px rgba(15, 40, 112, 0.05), 0 8px 24px rgba(15, 40, 112, 0.08); }
     /* Focus ring uniforme */
     .focus-ring:focus-visible { outline: 2px solid #155DFC; outline-offset: 2px; }
   </style>
 </head>
-<body class="bg-white min-h-screen text-zinc-900 antialiased">
+<body class="bg-[#F7F9FC] min-h-screen text-zinc-900 antialiased">
 
 <div id="app" class="min-h-screen">
   <!-- Header -->
