@@ -5,36 +5,85 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Leads — Tenex</title>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>💼</text></svg>" />
+  <!-- Police Inter, chargée en feature-light pour ne pas peser -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
   <!-- Tailwind CDN : zero build, parfait pour un single-file app -->
   <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    // Palette de marque autour de #155DFC (white + blue électrique)
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            brand: {
+              50:  '#EEF3FF',
+              100: '#DCE6FF',
+              200: '#B3C8FF',
+              300: '#7FA2FF',
+              400: '#4A78FF',
+              500: '#155DFC',
+              600: '#0E47CF',
+              700: '#0E3AA8',
+              800: '#102F87',
+              900: '#0F2870',
+            },
+          },
+          fontFamily: {
+            sans: ['Inter', 'ui-sans-serif', 'system-ui', '-apple-system', 'BlinkMacSystemFont', 'Segoe UI', 'Roboto', 'sans-serif'],
+          },
+          boxShadow: {
+            'soft':  '0 1px 2px rgba(15, 40, 112, 0.04), 0 4px 16px rgba(15, 40, 112, 0.04)',
+            'lift':  '0 2px 4px rgba(15, 40, 112, 0.06), 0 12px 32px rgba(15, 40, 112, 0.08)',
+            'brand': '0 1px 0 rgba(255,255,255,0.10) inset, 0 8px 24px rgba(21, 93, 252, 0.30)',
+          },
+        },
+      },
+    };
+  </script>
   <style>
-    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
+    html { -webkit-text-size-adjust: 100%; }
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      font-feature-settings: 'cv11', 'ss01';
+      letter-spacing: -0.005em;
+    }
     /* Scrollbar discrète */
-    ::-webkit-scrollbar { height: 6px; width: 6px; }
-    ::-webkit-scrollbar-thumb { background: #d4d4d8; border-radius: 3px; }
+    ::-webkit-scrollbar { height: 8px; width: 8px; }
+    ::-webkit-scrollbar-thumb { background: #DCE6FF; border-radius: 4px; }
+    ::-webkit-scrollbar-thumb:hover { background: #B3C8FF; }
+    /* Petites animations utilitaires */
+    @keyframes fade-in { from { opacity: 0; transform: translateY(2px); } to { opacity: 1; transform: none; } }
+    .anim-fade-in { animation: fade-in 0.18s ease-out; }
+    /* Lift léger au hover sur les cartes interactives */
+    .card-hover { transition: transform 0.15s ease, box-shadow 0.15s ease; }
+    .card-hover:hover { transform: translateY(-1px); }
+    /* Focus ring uniforme */
+    .focus-ring:focus-visible { outline: 2px solid #155DFC; outline-offset: 2px; }
   </style>
 </head>
-<body class="bg-gradient-to-b from-zinc-50 to-white min-h-screen text-zinc-900">
+<body class="bg-white min-h-screen text-zinc-900 antialiased">
 
 <div id="app" class="min-h-screen">
   <!-- Header -->
-  <header class="border-b border-zinc-200 bg-white/70 backdrop-blur-sm sticky top-0 z-10">
-    <div class="mx-auto max-w-7xl flex items-center justify-between px-6 py-5">
+  <header class="border-b border-zinc-200/80 bg-white/85 backdrop-blur-md sticky top-0 z-10">
+    <div class="mx-auto max-w-7xl flex items-center justify-between px-6 py-4">
       <div class="flex items-center gap-3">
-        <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-zinc-900 text-white">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2"/></svg>
+        <div class="flex h-10 w-10 items-center justify-center rounded-xl bg-brand-600 text-white shadow-brand">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2"/></svg>
         </div>
         <div>
-          <h1 class="text-xl font-semibold">Leads</h1>
+          <h1 class="text-xl font-semibold tracking-tight text-zinc-900">Leads</h1>
           <p class="text-xs text-zinc-500">Prospection B2B — Tenex</p>
         </div>
       </div>
       <div class="flex items-center gap-2">
-        <button id="btn-refresh" class="inline-flex items-center gap-2 rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm font-medium text-zinc-700 shadow-sm transition hover:bg-zinc-50 hover:shadow">
+        <button id="btn-refresh" class="inline-flex items-center gap-2 rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm font-medium text-zinc-700 shadow-soft transition hover:border-zinc-300 hover:bg-zinc-50">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/></svg>
           Rafraîchir
         </button>
-        <button id="btn-ingest" class="inline-flex items-center gap-2 rounded-lg bg-zinc-900 px-4 py-2 text-sm font-medium text-white shadow-sm transition hover:bg-zinc-700">
+        <button id="btn-ingest" class="inline-flex items-center gap-2 rounded-lg bg-brand-600 px-4 py-2 text-sm font-medium text-white shadow-brand transition hover:bg-brand-700 active:scale-[.98]">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 14.9A7 7 0 1 1 15.7 8h1.8a4.5 4.5 0 0 1 2.3 8.3"/><path d="M12 12v9"/><path d="m8 17 4 4 4-4"/></svg>
           Ingérer maintenant
         </button>
@@ -47,16 +96,16 @@
     <div id="stats" class="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-3"></div>
     <div id="today-banner"></div>
 
-    <section class="rounded-2xl border border-zinc-200 bg-white shadow-sm">
+    <section class="rounded-2xl border border-zinc-200/80 bg-white shadow-soft">
       <div class="flex flex-wrap items-center justify-between gap-4 border-b border-zinc-100 px-6 py-4">
-        <nav id="tabs" class="flex gap-1 rounded-lg bg-zinc-100 p-1 text-sm"></nav>
+        <nav id="tabs" class="flex gap-1 rounded-lg bg-zinc-100/80 p-1 text-sm"></nav>
         <div class="flex gap-2">
-          <button id="btn-mark-all" class="hidden inline-flex items-center gap-1.5 rounded-lg border border-zinc-300 bg-white px-3 py-1.5 text-sm text-zinc-700 transition hover:bg-zinc-50">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+          <button id="btn-mark-all" class="hidden inline-flex items-center gap-1.5 rounded-lg border border-zinc-200 bg-white px-3 py-1.5 text-sm font-medium text-zinc-700 transition hover:border-zinc-300 hover:bg-zinc-50">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
             <span id="btn-mark-all-label">Tout marquer</span>
           </button>
-          <button id="btn-export" class="inline-flex items-center gap-1.5 rounded-lg border border-zinc-300 bg-white px-3 py-1.5 text-sm text-zinc-700 transition hover:bg-zinc-50 disabled:opacity-50 disabled:cursor-not-allowed">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+          <button id="btn-export" class="inline-flex items-center gap-1.5 rounded-lg border border-zinc-200 bg-white px-3 py-1.5 text-sm font-medium text-zinc-700 transition hover:border-zinc-300 hover:bg-zinc-50 disabled:opacity-50 disabled:cursor-not-allowed">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
             Export CSV
           </button>
         </div>
@@ -71,33 +120,33 @@
 </div>
 
 <!-- Modal Prospect (caché par défaut) -->
-<dialog id="prospect-dialog" class="rounded-2xl border border-zinc-200 p-0 shadow-2xl backdrop:bg-zinc-900/40 backdrop:backdrop-blur-sm">
+<dialog id="prospect-dialog" class="rounded-2xl border border-zinc-200/80 p-0 shadow-lift backdrop:bg-zinc-900/30 backdrop:backdrop-blur-sm">
   <form id="prospect-form" class="flex w-[460px] flex-col p-0">
     <div class="border-b border-zinc-100 px-6 py-5">
-      <h2 id="prospect-title" class="text-lg font-semibold"></h2>
+      <h2 id="prospect-title" class="text-lg font-semibold tracking-tight text-zinc-900"></h2>
       <p id="prospect-subtitle" class="mt-0.5 text-sm text-zinc-500"></p>
     </div>
     <div class="flex flex-col gap-4 px-6 py-5">
       <label class="flex flex-col gap-1.5">
         <span class="text-xs font-medium text-zinc-600">Nom du contact</span>
-        <input name="contact_name" class="rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm placeholder:text-zinc-400 focus:border-zinc-400 focus:outline-none focus:ring-2 focus:ring-zinc-900/10" placeholder="Jeanne Dupont" />
+        <input name="contact_name" class="rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm placeholder:text-zinc-400 focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-500/20" placeholder="Jeanne Dupont" />
       </label>
       <label class="flex flex-col gap-1.5">
         <span class="text-xs font-medium text-zinc-600">Email</span>
-        <input name="contact_email" type="email" class="rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm placeholder:text-zinc-400 focus:border-zinc-400 focus:outline-none focus:ring-2 focus:ring-zinc-900/10" placeholder="jeanne.dupont@exemple.fr" />
+        <input name="contact_email" type="email" class="rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm placeholder:text-zinc-400 focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-500/20" placeholder="jeanne.dupont@exemple.fr" />
       </label>
       <label class="flex flex-col gap-1.5">
         <span class="text-xs font-medium text-zinc-600">Téléphone</span>
-        <input name="contact_phone" type="tel" class="rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm placeholder:text-zinc-400 focus:border-zinc-400 focus:outline-none focus:ring-2 focus:ring-zinc-900/10" placeholder="06 12 34 56 78" />
+        <input name="contact_phone" type="tel" class="rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm placeholder:text-zinc-400 focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-500/20" placeholder="06 12 34 56 78" />
       </label>
       <label class="flex flex-col gap-1.5">
         <span class="text-xs font-medium text-zinc-600">Notes</span>
-        <textarea name="notes" rows="3" class="rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm placeholder:text-zinc-400 focus:border-zinc-400 focus:outline-none focus:ring-2 focus:ring-zinc-900/10" placeholder="Historique des échanges, intérêt, blocages…"></textarea>
+        <textarea name="notes" rows="3" class="rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm placeholder:text-zinc-400 focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-500/20" placeholder="Historique des échanges, intérêt, blocages…"></textarea>
       </label>
     </div>
     <div class="flex justify-end gap-2 border-t border-zinc-100 bg-zinc-50/50 px-6 py-4">
       <button type="button" id="prospect-cancel" class="rounded-lg border border-zinc-200 bg-white px-4 py-2 text-sm font-medium text-zinc-700 transition hover:bg-zinc-50">Annuler</button>
-      <button type="submit" id="prospect-submit" class="rounded-lg bg-zinc-900 px-4 py-2 text-sm font-medium text-white shadow-sm transition hover:bg-zinc-700 disabled:opacity-50">Enregistrer</button>
+      <button type="submit" id="prospect-submit" class="rounded-lg bg-brand-600 px-4 py-2 text-sm font-medium text-white shadow-brand transition hover:bg-brand-700 disabled:opacity-50 active:scale-[.98]">Enregistrer</button>
     </div>
   </form>
 </dialog>
@@ -439,7 +488,7 @@ function showToast(msg, kind = 'info') {
   container.innerHTML = '';
   const style = kind === 'error'
     ? 'border-red-200 bg-red-50 text-red-800'
-    : 'border-blue-200 bg-blue-50 text-blue-800';
+    : 'border-brand-100 bg-brand-50 text-brand-800';
   const toast = el('div', { class: `mb-6 flex items-start justify-between gap-3 rounded-lg border px-4 py-3 text-sm ${style}` },
     el('span', {}, msg),
     el('button', {
@@ -569,20 +618,33 @@ function renderStats() {
   const news = store.jobs.filter((j) => j.status === 'new').length;
   const prosp = store.jobs.filter((j) => j.status === 'prospected').length;
 
-  function card(label, value, accent) {
-    const badge = { zinc: 'bg-zinc-900 text-white', blue: 'bg-blue-50 text-blue-700 ring-1 ring-blue-100', green: 'bg-emerald-50 text-emerald-700 ring-1 ring-emerald-100' }[accent];
-    const tag = { zinc: 'total', blue: 'actif', green: 'traité' }[accent];
-    return el('div', { class: 'rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm' },
-      el('p', { class: 'text-xs font-medium uppercase tracking-wider text-zinc-500' }, label),
-      el('div', { class: 'mt-2 flex items-baseline gap-3' },
-        el('span', { class: 'text-3xl font-semibold' }, value),
-        el('span', { class: `rounded-full px-2 py-0.5 text-xs font-medium ${badge}` }, tag),
+  function card(label, value, accent, icon) {
+    const accentMap = {
+      brand:   { tag: 'bg-brand-50 text-brand-700 ring-brand-100',         iconBg: 'bg-brand-50 text-brand-600',     tagLabel: 'total' },
+      info:    { tag: 'bg-blue-50 text-blue-700 ring-blue-100',             iconBg: 'bg-blue-50 text-blue-600',       tagLabel: 'actif' },
+      success: { tag: 'bg-emerald-50 text-emerald-700 ring-emerald-100',    iconBg: 'bg-emerald-50 text-emerald-600', tagLabel: 'traité' },
+    };
+    const a = accentMap[accent] ?? accentMap.brand;
+    return el('div', { class: 'card-hover relative overflow-hidden rounded-2xl border border-zinc-200/80 bg-white p-5 shadow-soft' },
+      el('div', { class: 'flex items-start justify-between gap-3' },
+        el('div', {},
+          el('p', { class: 'text-xs font-medium uppercase tracking-wider text-zinc-500' }, label),
+          el('div', { class: 'mt-2 flex items-baseline gap-2' },
+            el('span', { class: 'text-3xl font-semibold tracking-tight text-zinc-900' }, value),
+            el('span', { class: `rounded-full px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${a.tag}` }, a.tagLabel),
+          ),
+        ),
+        el('div', { class: `flex h-10 w-10 items-center justify-center rounded-xl ${a.iconBg}`, html: icon }),
       ),
     );
   }
-  container.appendChild(card('Total offres', total, 'zinc'));
-  container.appendChild(card('À prospecter', news, 'blue'));
-  container.appendChild(card('Prospectés', prosp, 'green'));
+  // Icônes Lucide-style en SVG inline (stroke 1.75 pour un trait plus fin)
+  const ICON_TOTAL = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="3"/><path d="M9 9h6v6H9z"/></svg>';
+  const ICON_NEW   = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.35-4.35"/></svg>';
+  const ICON_DONE  = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>';
+  container.appendChild(card('Total offres', total, 'brand', ICON_TOTAL));
+  container.appendChild(card('À prospecter', news, 'info', ICON_NEW));
+  container.appendChild(card('Prospectés', prosp, 'success', ICON_DONE));
 }
 
 function renderTabs() {
@@ -598,8 +660,8 @@ function renderTabs() {
     const btn = el('button', {
       type: 'button',
       class: active
-        ? 'rounded-md bg-white px-3 py-1.5 font-medium text-zinc-900 shadow-sm'
-        : 'rounded-md px-3 py-1.5 text-zinc-600 transition hover:text-zinc-900',
+        ? 'rounded-md bg-white px-3 py-1.5 font-medium text-brand-700 shadow-sm ring-1 ring-zinc-200/50'
+        : 'rounded-md px-3 py-1.5 text-zinc-600 transition hover:text-zinc-900 hover:bg-white/50',
       onClick: () => updateFilter('status', t.value),
     }, t.label);
     nav.appendChild(btn);
@@ -618,7 +680,7 @@ function renderFilters() {
     const hasValue = value !== '';
     const sel = el('select', {
       'aria-label': label,
-      class: `rounded-lg border px-3 py-1.5 text-sm transition focus:outline-none focus:ring-2 focus:ring-zinc-900/10 ${hasValue ? 'border-zinc-900 bg-zinc-900 text-white' : 'border-zinc-200 bg-white text-zinc-700 hover:border-zinc-300'}`,
+      class: `rounded-lg border px-3 py-1.5 text-sm transition focus:outline-none focus:ring-2 focus:ring-brand-500/25 ${hasValue ? 'border-brand-600 bg-brand-600 text-white' : 'border-zinc-200 bg-white text-zinc-700 hover:border-zinc-300'}`,
       onChange: (e) => updateFilter(key, e.target.value),
     });
     sel.appendChild(el('option', { value: '' }, `Tous — ${label}`));
@@ -773,7 +835,7 @@ function buildJobRow(job, { showCheckbox = false, indented = false } = {}) {
     }, job.company_name),
     isUnknownCompany ? el('button', {
       type: 'button',
-      class: 'text-xs text-blue-600 underline-offset-2 hover:underline',
+      class: 'text-xs font-medium text-brand-600 underline-offset-2 hover:underline',
       title: 'Renseigner le nom de l\'entreprise (e)',
       onClick: (e) => {
         e.stopPropagation();
@@ -790,7 +852,7 @@ function buildJobRow(job, { showCheckbox = false, indented = false } = {}) {
   if (job.source_url) {
     const link = el('a', {
       href: job.source_url, target: '_blank', rel: 'noopener noreferrer',
-      class: 'mt-0.5 inline-flex items-center gap-1 text-xs text-blue-600 hover:underline',
+      class: 'mt-0.5 inline-flex items-center gap-1 text-xs font-medium text-brand-600 hover:underline',
       html: 'Voir l\'offre <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>',
     });
     link.addEventListener('click', (e) => e.stopPropagation());
@@ -811,8 +873,8 @@ function buildJobRow(job, { showCheckbox = false, indented = false } = {}) {
 
   // Statut
   const statusBadge = job.status === 'new'
-    ? el('span', { class: 'inline-flex items-center gap-1 rounded-full bg-blue-50 px-2 py-0.5 text-xs font-medium text-blue-700 ring-1 ring-inset ring-blue-100' },
-        el('span', { class: 'h-1.5 w-1.5 rounded-full bg-blue-500' }),
+    ? el('span', { class: 'inline-flex items-center gap-1 rounded-full bg-brand-50 px-2 py-0.5 text-xs font-medium text-brand-700 ring-1 ring-inset ring-brand-100' },
+        el('span', { class: 'h-1.5 w-1.5 rounded-full bg-brand-500' }),
         'À prospecter',
       )
     : el('span', { class: 'inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700 ring-1 ring-inset ring-emerald-100' },
@@ -841,7 +903,7 @@ function buildJobRow(job, { showCheckbox = false, indented = false } = {}) {
     type: 'button',
     class: job.status === 'prospected'
       ? 'inline-flex items-center rounded-lg border border-zinc-200 bg-white px-3 py-1.5 text-xs font-medium text-zinc-700 shadow-sm transition hover:bg-zinc-50'
-      : 'inline-flex items-center rounded-lg bg-zinc-900 px-3 py-1.5 text-xs font-medium text-white shadow-sm transition hover:bg-zinc-700',
+      : 'inline-flex items-center rounded-lg bg-brand-600 px-3 py-1.5 text-xs font-medium text-white shadow-brand transition hover:bg-brand-700 active:scale-[.98]',
     title: job.status === 'prospected' ? 'Éditer (p)' : 'Prospecter (p)',
     onClick: (e) => {
       e.stopPropagation();
@@ -917,7 +979,7 @@ function buildAccountGroupRow(account, jobs) {
           : null,
         isUnknownCompany ? el('button', {
           type: 'button',
-          class: 'text-xs text-blue-600 underline-offset-2 hover:underline',
+          class: 'text-xs font-medium text-brand-600 underline-offset-2 hover:underline',
           title: 'Renseigner le nom de l\'entreprise',
           onClick: (e) => {
             e.stopPropagation();
@@ -1076,12 +1138,12 @@ function buildAccountExpandedPanel(account, totalCols) {
   const labelInput = el('input', {
     type: 'text',
     placeholder: 'ex: rappeler Marie, envoyer le pitch...',
-    class: 'min-w-0 flex-1 rounded-lg border border-zinc-200 bg-white px-3 py-1.5 text-sm placeholder:text-zinc-400 focus:border-zinc-400 focus:outline-none focus:ring-2 focus:ring-zinc-900/10',
+    class: 'min-w-0 flex-1 rounded-lg border border-zinc-200 bg-white px-3 py-1.5 text-sm placeholder:text-zinc-400 focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-500/20',
   });
   labelInput.value = account.next_action ?? '';
   const dateInput = el('input', {
     type: 'date',
-    class: 'rounded-lg border border-zinc-200 bg-white px-3 py-1.5 text-sm focus:border-zinc-400 focus:outline-none focus:ring-2 focus:ring-zinc-900/10',
+    class: 'rounded-lg border border-zinc-200 bg-white px-3 py-1.5 text-sm focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-500/20',
   });
   dateInput.value = account.next_action_at ? account.next_action_at.slice(0, 10) : '';
 
@@ -1149,7 +1211,7 @@ function buildAccountExpandedPanel(account, totalCols) {
   const notesArea = el('textarea', {
     rows: 2,
     placeholder: 'Contexte, blocages, prochaines étapes...',
-    class: 'rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm placeholder:text-zinc-400 focus:border-zinc-400 focus:outline-none focus:ring-2 focus:ring-zinc-900/10',
+    class: 'rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm placeholder:text-zinc-400 focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-500/20',
   });
   notesArea.value = account.notes ?? '';
   let savingNotes = false;
@@ -1245,7 +1307,7 @@ function buildContactCard(account, contact) {
   if (contact.email) {
     info.appendChild(el('a', {
       href: `mailto:${contact.email}`,
-      class: 'text-xs text-blue-600 hover:underline',
+      class: 'text-xs font-medium text-brand-600 hover:underline',
       onClick: (e) => e.stopPropagation(),
     }, contact.email));
   }
@@ -1295,7 +1357,7 @@ function buildContactForm(account, existing) {
   const card = el('div', {
     class: 'flex flex-col gap-2 rounded-lg border border-zinc-300 bg-white p-3 ring-2 ring-zinc-900/5',
   });
-  const inputClass = 'rounded-md border border-zinc-200 bg-white px-2.5 py-1.5 text-sm placeholder:text-zinc-400 focus:border-zinc-400 focus:outline-none focus:ring-2 focus:ring-zinc-900/10';
+  const inputClass = 'rounded-md border border-zinc-200 bg-white px-2.5 py-1.5 text-sm placeholder:text-zinc-400 focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-500/20';
   const nameInput = el('input', { type: 'text', placeholder: 'Nom *', class: inputClass });
   const roleInput = el('input', { type: 'text', placeholder: 'Rôle (DRH, manager...)', class: inputClass });
   const emailInput = el('input', { type: 'email', placeholder: 'Email', class: inputClass });
@@ -1328,7 +1390,7 @@ function buildContactForm(account, existing) {
   }, 'Annuler'));
   actions.appendChild(el('button', {
     type: 'button',
-    class: 'rounded-md bg-zinc-900 px-3 py-1 text-xs font-medium text-white transition hover:bg-zinc-700',
+    class: 'rounded-md bg-brand-600 px-3 py-1 text-xs font-medium text-white transition hover:bg-brand-700 active:scale-[.98]',
     onClick: async (e) => {
       e.stopPropagation();
       const payload = {
@@ -1371,9 +1433,9 @@ function renderTable() {
 
   if (allFiltered.length === 0) {
     visibleJobsCache = [];
-    container.appendChild(el('div', { class: 'flex flex-col items-center justify-center gap-3 px-6 py-16 text-center' },
-      el('div', { class: 'flex h-16 w-16 items-center justify-center rounded-full bg-zinc-100 text-zinc-400', html: '<svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>' }),
-      el('p', { class: 'text-sm font-medium text-zinc-700' }, 'Aucune offre à afficher'),
+    container.appendChild(el('div', { class: 'flex flex-col items-center justify-center gap-4 px-6 py-20 text-center anim-fade-in' },
+      el('div', { class: 'relative flex h-20 w-20 items-center justify-center rounded-2xl bg-gradient-to-br from-brand-50 to-brand-100 text-brand-600 shadow-soft', html: '<svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.35-4.35"/></svg>' }),
+      el('p', { class: 'text-base font-semibold tracking-tight text-zinc-900' }, 'Aucune offre à afficher'),
       el('p', { class: 'max-w-sm text-sm text-zinc-500' }, 'Lance une ingestion ou ajuste les filtres pour voir apparaître des offres ici.'),
     ));
     return;
@@ -1412,7 +1474,7 @@ function renderTable() {
     headerCells.push(el('th', { class: 'px-3 py-3 font-medium first:pl-6 last:pr-6' }, h));
   }
   table.appendChild(el('thead', {},
-    el('tr', { class: 'border-b border-zinc-100 bg-zinc-50/50 text-left text-xs uppercase tracking-wider text-zinc-500' }, ...headerCells),
+    el('tr', { class: 'border-b border-zinc-100 bg-zinc-50/60 text-left text-[11px] font-semibold uppercase tracking-wider text-zinc-500' }, ...headerCells),
   ));
 
   // === Corps ===
